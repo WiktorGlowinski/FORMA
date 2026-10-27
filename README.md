@@ -1,4 +1,4 @@
-# Aplikacja-sportowa
+# Aplikacja-sportowa.
 Aplikacja sportowa dla trenerów i zawodników
 
 
