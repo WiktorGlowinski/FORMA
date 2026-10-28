@@ -29,6 +29,9 @@ export function SiteHeader() {
               {item.label}
             </a>
           ))}
+          <Link href="/trener" className="pitch-link">
+            Panel trenera
+          </Link>
         </nav>
 
         {/* Przyciski nawigacji na desktopie */}
@@ -80,6 +83,9 @@ export function SiteHeader() {
                 {item.label}
               </a>
             ))}
+            <Link href="/trener" onClick={close} className="rounded-lg px-3 py-3 text-base hover:bg-accent">
+              Panel trenera
+            </Link>
           </nav>
           <div className="mt-4 flex flex-col gap-2">
             <a
