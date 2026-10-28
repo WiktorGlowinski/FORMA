@@ -1,16 +1,13 @@
-"use client";
-
-import { useParams } from "next/navigation";
+import { Suspense } from "react";
 import { CoachShell } from "@/components/coach/coach-shell";
-import { QuickEvaluation } from "@/components/coach/quick-evaluation";
+import { TrainingScreen } from "@/components/coach/training-screen";
 
 export default function TrainingPage() {
-  const params = useParams<{ trainingId: string }>();
-  const trainingId = Array.isArray(params.trainingId) ? params.trainingId[0] : params.trainingId;
-
   return (
     <CoachShell>
-      <QuickEvaluation trainingId={trainingId} />
+      <Suspense fallback={<p className="text-sm text-muted-foreground">OdczytujÄ™ jednostkÄ™â€¦</p>}>
+        <TrainingScreen />
+      </Suspense>
     </CoachShell>
   );
 }

@@ -1,10 +1,11 @@
 export type EvaluationScore = "-" | "0" | "+";
 export type AbsenceReason = "unexcused" | "excused" | "sick" | "injury";
+export type InjuryKind = "cast" | "joint" | "muscle" | "head" | "overload" | "other";
 export type TrainingStatus = "scheduled" | "completed" | "cancelled";
 
 export type Mark =
   | { type: "score"; score: EvaluationScore }
-  | { type: "absence"; reason: AbsenceReason };
+  | { type: "absence"; reason: AbsenceReason; injury?: InjuryKind };
 
 export interface SquadPlayer {
   id: string;
@@ -33,13 +34,22 @@ export const ABSENCE_REASONS: { id: AbsenceReason; label: string }[] = [
   { id: "injury", label: "Kontuzja" },
 ];
 
+export const INJURY_KINDS: { id: InjuryKind; label: string; hint: string }[] = [
+  { id: "cast", label: "Gips", hint: "Złamanie albo unieruchomienie" },
+  { id: "joint", label: "Staw", hint: "Skręcenie, kolano, kostka" },
+  { id: "muscle", label: "Mięsień", hint: "Naderwanie, naciągnięcie" },
+  { id: "head", label: "Głowa", hint: "Uderzenie, wstrząśnienie" },
+  { id: "overload", label: "Przeciążenie", hint: "Ból bez ostrego urazu" },
+  { id: "other", label: "Inna", hint: "Coś spoza tej listy" },
+];
+
 export const SCORE_OPTIONS: { score: EvaluationScore; title: string }[] = [
   { score: "-", title: "Słabiej" },
   { score: "0", title: "Typowo" },
   { score: "+", title: "Powyżej" },
 ];
 
-const U14: SquadPlayer[] = [
+export const U14_SQUAD: SquadPlayer[] = [
   { id: "lena", firstName: "Lena", lastName: "Wójcik", jerseyNumber: 7, role: "Skrzydłowa" },
   { id: "marek", firstName: "Marek", lastName: "Zieliński", jerseyNumber: 4, role: "Obrońca" },
   { id: "oliwia", firstName: "Oliwia", lastName: "Nowak", jerseyNumber: 11, role: "Napastniczka" },
@@ -60,7 +70,7 @@ export const TRAININGS: TrainingSession[] = [
     place: "Boisko główne",
     topic: "Gra do przodu po odbiorze",
     status: "completed",
-    players: U14,
+    players: U14_SQUAD,
   },
   {
     id: "u14-2026-10-22",
@@ -71,7 +81,7 @@ export const TRAININGS: TrainingSession[] = [
     place: "Boisko główne",
     topic: "Pressing po stracie",
     status: "completed",
-    players: U14,
+    players: U14_SQUAD,
   },
   {
     id: "u14-2026-10-29",
@@ -82,7 +92,7 @@ export const TRAININGS: TrainingSession[] = [
     place: "Hala",
     topic: "Gra w przewadze",
     status: "scheduled",
-    players: U14,
+    players: U14_SQUAD,
   },
   {
     id: "u14-2026-10-24",
@@ -92,14 +102,14 @@ export const TRAININGS: TrainingSession[] = [
     endTime: "17:15",
     place: "Boisko boczne",
     status: "cancelled",
-    players: U14,
+    players: U14_SQUAD,
   },
 ];
 
 export const STARTER_MARKS: Record<string, Record<string, Mark>> = {
   "u14-2026-10-22": {
     lena: { type: "score", score: "0" },
-    marek: { type: "absence", reason: "sick" },
+    marek: { type: "absence", reason: "injury", injury: "cast" },
     oliwia: { type: "score", score: "+" },
   },
 };
@@ -121,11 +131,19 @@ export function formatTrainingDate(iso: string) {
   }).format(new Date(year, month - 1, day));
 }
 
+export function injuryLabel(kind: InjuryKind | undefined) {
+  return INJURY_KINDS.find((item) => item.id === kind)?.label;
+}
+
 export function markLabel(mark: Mark) {
   if (mark.type === "score") {
     if (mark.score === "-") return "Słabiej niż zwykle";
     if (mark.score === "0") return "Typowy poziom";
     return "Powyżej siebie";
+  }
+  if (mark.reason === "injury") {
+    const kind = injuryLabel(mark.injury);
+    return kind ? `Nieobecny · Kontuzja · ${kind}` : "Nieobecny · Kontuzja";
   }
   const reason = ABSENCE_REASONS.find((item) => item.id === mark.reason);
   return `Nieobecny · ${reason?.label ?? "bez powodu"}`;

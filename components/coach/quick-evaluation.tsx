@@ -6,6 +6,7 @@ import { ChevronLeft, RotateCcw } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   ABSENCE_REASONS,
+  INJURY_KINDS,
   SCORE_OPTIONS,
   getTraining,
   markLabel,
@@ -13,10 +14,12 @@ import {
   ratedCount,
   type AbsenceReason,
   type EvaluationScore,
+  type InjuryKind,
   type Mark,
   type SquadPlayer,
 } from "@/components/coach/data";
-import { useTrainingMarks } from "@/components/coach/use-coach-session";
+import { InjuryIcon } from "@/components/coach/injury-icon";
+import { useSquad, useTrainingMarks } from "@/components/coach/use-coach-session";
 import { cn } from "@/lib/utils";
 
 const SCORE_TONE: Record<EvaluationScore, string> = {
@@ -27,9 +30,12 @@ const SCORE_TONE: Record<EvaluationScore, string> = {
 
 export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   const training = getTraining(trainingId);
-  const { marks, ready, setMark, clearTraining } = useTrainingMarks(trainingId);
+  const { players, ready: squadReady } = useSquad();
+  const { marks, ready: marksReady, setMark, clearTraining } = useTrainingMarks(trainingId);
   const [index, setIndex] = useState(0);
   const [absenceOpen, setAbsenceOpen] = useState(false);
+  const [injuryOpen, setInjuryOpen] = useState(false);
+  const ready = squadReady && marksReady;
 
   if (!training) {
     return (
@@ -66,22 +72,30 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     return <p className="text-sm text-muted-foreground">Odczytuję zapis tej jednostki…</p>;
   }
 
-  const total = training.players.length;
-  const done = ratedCount(training.players, marks);
-  const player = training.players[index];
+  const total = players.length;
+  const done = ratedCount(players, marks);
+  const player = players[index];
   const finished = index >= total;
 
   function commit(mark: Mark) {
     if (!player) return;
     setMark(player.id, mark);
     setAbsenceOpen(false);
+    setInjuryOpen(false);
     setIndex((current) => Math.min(current + 1, total));
+  }
+
+  function goTo(next: number) {
+    setAbsenceOpen(false);
+    setInjuryOpen(false);
+    setIndex(next);
   }
 
   function restart() {
     clearTraining();
     setIndex(0);
     setAbsenceOpen(false);
+    setInjuryOpen(false);
   }
 
   return (
@@ -121,12 +135,9 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
         {finished || !player ? (
           <Summary
-            players={training.players}
+            players={players}
             marks={marks}
-            onEdit={(next) => {
-              setAbsenceOpen(false);
-              setIndex(next);
-            }}
+            onEdit={goTo}
             onReset={restart}
           />
         ) : (
@@ -136,15 +147,23 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
             total={total}
             mark={marks[player.id]}
             absenceOpen={absenceOpen}
-            onToggleAbsence={() => setAbsenceOpen((open) => !open)}
-            onRate={(score) => commit({ type: "score", score })}
-            onAbsent={(reason) => commit({ type: "absence", reason })}
-            onBack={() => {
-              setAbsenceOpen(false);
-              setIndex((current) => Math.max(0, current - 1));
+            injuryOpen={injuryOpen}
+            onToggleAbsence={() => {
+              setInjuryOpen(false);
+              setAbsenceOpen((open) => !open);
             }}
+            onRate={(score) => commit({ type: "score", score })}
+            onReason={(reason) => {
+              if (reason === "injury") {
+                setInjuryOpen(true);
+                return;
+              }
+              commit({ type: "absence", reason });
+            }}
+            onInjury={(injury) => commit({ type: "absence", reason: "injury", injury })}
+            onBack={() => goTo(Math.max(0, index - 1))}
             allMarked={done === total}
-            onSummary={() => setIndex(total)}
+            onSummary={() => goTo(total)}
           />
         )}
       </div>
@@ -158,9 +177,11 @@ function PlayerStep({
   total,
   mark,
   absenceOpen,
+  injuryOpen,
   onToggleAbsence,
   onRate,
-  onAbsent,
+  onReason,
+  onInjury,
   onBack,
   allMarked,
   onSummary,
@@ -170,13 +191,17 @@ function PlayerStep({
   total: number;
   mark?: Mark;
   absenceOpen: boolean;
+  injuryOpen: boolean;
   onToggleAbsence: () => void;
   onRate: (score: EvaluationScore) => void;
-  onAbsent: (reason: AbsenceReason) => void;
+  onReason: (reason: AbsenceReason) => void;
+  onInjury: (injury: InjuryKind) => void;
   onBack: () => void;
   allMarked: boolean;
   onSummary: () => void;
 }) {
+  const injuryMark = mark?.type === "absence" && mark.reason === "injury" ? mark.injury : undefined;
+
   return (
     <div key={player.id} className="step-in px-4 py-6 sm:px-8 sm:py-8">
       <p className="text-xs tracking-[0.14em] text-muted-foreground uppercase">
@@ -199,8 +224,11 @@ function PlayerStep({
       </div>
 
       {mark ? (
-        <p className="mt-4 text-sm text-muted-foreground">
-          Zapis roboczy: <span className="text-foreground">{markLabel(mark)}</span>
+        <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+          {injuryMark ? <InjuryIcon kind={injuryMark} className="size-5 text-foreground" /> : null}
+          <span>
+            Zapis roboczy: <span className="text-foreground">{markLabel(mark)}</span>
+          </span>
         </p>
       ) : null}
 
@@ -235,7 +263,7 @@ function PlayerStep({
           onClick={onToggleAbsence}
           className={cn(
             "w-full rounded-md border-2 px-4 py-3 text-left text-sm transition duration-150 hover:-translate-y-0.5 hover:border-foreground/40 hover:bg-secondary",
-            mark?.type === "absence" ? "border-foreground/40 bg-secondary" : "border-foreground/15",
+            mark?.type === "absence" || absenceOpen ? "border-foreground/40 bg-secondary" : "border-foreground/15",
           )}
         >
           <span className="font-medium">Nieobecny</span>
@@ -244,13 +272,16 @@ function PlayerStep({
         {absenceOpen ? (
           <div className="mt-2 grid grid-cols-2 gap-2" role="group" aria-label="Powód nieobecności">
             {ABSENCE_REASONS.map((reason) => {
-              const selected = mark?.type === "absence" && mark.reason === reason.id;
+              const selected =
+                reason.id === "injury"
+                  ? injuryOpen || injuryMark !== undefined
+                  : mark?.type === "absence" && mark.reason === reason.id;
               return (
                 <button
                   key={reason.id}
                   type="button"
                   aria-pressed={selected}
-                  onClick={() => onAbsent(reason.id)}
+                  onClick={() => onReason(reason.id)}
                   className={cn(
                     "rounded-md border-2 px-3 py-3 text-sm transition duration-150 hover:-translate-y-0.5",
                     selected
@@ -262,6 +293,36 @@ function PlayerStep({
                 </button>
               );
             })}
+          </div>
+        ) : null}
+        {absenceOpen && injuryOpen ? (
+          <div className="mt-3" role="group" aria-label="Rodzaj kontuzji">
+            <p className="text-sm text-muted-foreground">Kontuzja nie jest minusem. Wybierz, co się stało.</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {INJURY_KINDS.map((kind) => {
+                const selected = injuryMark === kind.id;
+                return (
+                  <button
+                    key={kind.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => onInjury(kind.id)}
+                    className={cn(
+                      "flex flex-col items-center rounded-md border-2 px-2 py-3 text-center transition duration-150 hover:-translate-y-0.5",
+                      selected
+                        ? "border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)]"
+                        : "border-foreground/15 hover:border-foreground/40 hover:bg-accent",
+                    )}
+                  >
+                    <InjuryIcon kind={kind.id} className="size-8" />
+                    <span className="mt-2 text-sm font-medium">{kind.label}</span>
+                    <span className={cn("mt-0.5 text-xs", selected ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                      {kind.hint}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         ) : null}
       </div>
@@ -276,7 +337,7 @@ function PlayerStep({
             Do podsumowania
           </Button>
         ) : (
-          <p className="text-xs text-muted-foreground">Wybór zapisuje się od razu.</p>
+          <p className="text-xs text-muted-foreground">Wybór zapisuje się od razu. Przy kontuzji najpierw rodzaj.</p>
         )}
       </div>
     </div>
@@ -312,8 +373,8 @@ function Summary({
       <p className="text-sm font-medium tracking-[0.16em] text-primary uppercase">Skład zamknięty</p>
       <h2 className="mt-2 font-heading text-4xl tracking-tight sm:text-5xl">Wszyscy mają status.</h2>
       <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
-        Nieobecność nie weszła do rozkładu minus / zero / plus. W klubie ten zapis siądzie przy treningu, gdy
-        podepniemy bazę.
+        Nieobecność, także kontuzja, nie weszła do rozkładu minus / zero / plus. W klubie ten zapis siądzie przy
+        treningu, gdy podepniemy bazę.
       </p>
       <dl className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Stat label="Słabiej" value={counts.minus} tone="text-minus" />
@@ -324,6 +385,7 @@ function Summary({
       <ul className="mt-6 divide-y divide-border rounded-md border-2 border-foreground/15">
         {players.map((player, playerIndex) => {
           const mark = marks[player.id];
+          const injury = mark?.type === "absence" && mark.reason === "injury" ? mark.injury : undefined;
           return (
             <li key={player.id} className="flex items-center justify-between gap-3 px-4 py-3">
               <div className="min-w-0">
@@ -331,7 +393,10 @@ function Summary({
                   <span className="mr-2 text-muted-foreground tabular-nums">{player.jerseyNumber}</span>
                   {playerName(player)}
                 </p>
-                <p className="text-sm text-muted-foreground">{mark ? markLabel(mark) : "Brak oceny — to nie jest zero"}</p>
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  {injury ? <InjuryIcon kind={injury} className="size-4 shrink-0 text-foreground" /> : null}
+                  <span>{mark ? markLabel(mark) : "Brak oceny. To nie jest zero."}</span>
+                </p>
               </div>
               <Button type="button" variant="ghost" size="sm" onClick={() => onEdit(playerIndex)}>
                 Popraw
