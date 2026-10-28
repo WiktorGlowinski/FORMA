@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Menu, X } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { NAV } from "@/components/landing/copy";
@@ -15,7 +16,7 @@ export function SiteHeader() {
   }
 
   return (
-    <header className="sticky top-0 z-40 border-b-2 border-foreground/15 bg-background/90">
+    <header className="sticky top-0 z-40 border-b-2 border-foreground/15 bg-background/90 backdrop-blur-sm">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <a href="#gora" className="group flex items-center gap-2.5 text-foreground" onClick={close}>
           <PitchMark className="size-7 text-primary transition-transform duration-200 group-hover:rotate-12" />
@@ -30,18 +31,29 @@ export function SiteHeader() {
           ))}
         </nav>
 
-        <div className="hidden md:block">
+        {/* Przyciski nawigacji na desktopie */}
+        <div className="hidden items-center gap-3 md:flex">
           <a
             href="#ocena"
             className={cn(
-              buttonVariants({ size: "lg" }),
-              "h-10 px-4 transition-transform hover:-translate-y-0.5 hover:shadow-[3px_3px_0_0_var(--foreground)]",
+              buttonVariants({ variant: "outline", size: "lg" }),
+              "h-10 border-2 border-foreground/20 px-4 transition-transform hover:-translate-y-0.5 hover:border-foreground hover:shadow-[3px_3px_0_0_var(--foreground)]"
             )}
           >
-            Wypróbuj ocenę
+            Wypróbuj demo
           </a>
+          <Link
+            href="/login"
+            className={cn(
+              buttonVariants({ size: "lg" }),
+              "h-10 px-4 transition-transform hover:-translate-y-0.5 hover:shadow-[3px_3px_0_0_var(--foreground)]"
+            )}
+          >
+            Panel sztabu
+          </Link>
         </div>
 
+        {/* Przycisk menu mobilnego */}
         <button
           type="button"
           className="inline-flex size-10 items-center justify-center rounded-lg border border-border md:hidden"
@@ -54,6 +66,7 @@ export function SiteHeader() {
         </button>
       </div>
 
+      {/* Rozwijane menu na telefonie */}
       {open ? (
         <div id="menu-mobilne" className="border-t border-border px-4 py-4 md:hidden">
           <nav className="flex flex-col gap-1" aria-label="Sekcje strony">
@@ -68,13 +81,25 @@ export function SiteHeader() {
               </a>
             ))}
           </nav>
-          <a
-            href="#ocena"
-            onClick={close}
-            className={cn(buttonVariants({ size: "lg" }), "mt-3 h-11 w-full")}
-          >
-            Wypróbuj ocenę
-          </a>
+          <div className="mt-4 flex flex-col gap-2">
+            <a
+              href="#ocena"
+              onClick={close}
+              className={cn(
+                buttonVariants({ variant: "outline", size: "lg" }),
+                "h-11 w-full border-2 border-foreground/20 text-center"
+              )}
+            >
+              Wypróbuj demo
+            </a>
+            <Link
+              href="/login"
+              onClick={close}
+              className={cn(buttonVariants({ size: "lg" }), "h-11 w-full text-center")}
+            >
+              Panel sztabu
+            </Link>
+          </div>
         </div>
       ) : null}
     </header>
