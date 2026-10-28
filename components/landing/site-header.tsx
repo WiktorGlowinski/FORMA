@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Menu, X } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { NAV } from "@/components/landing/copy";
@@ -28,6 +29,9 @@ export function SiteHeader() {
               {item.label}
             </a>
           ))}
+          <Link href="/trener" className="pitch-link">
+            Panel trenera
+          </Link>
         </nav>
 
         <div className="hidden md:block">
@@ -67,6 +71,9 @@ export function SiteHeader() {
                 {item.label}
               </a>
             ))}
+            <Link href="/trener" onClick={close} className="rounded-lg px-3 py-3 text-base hover:bg-accent">
+              Panel trenera
+            </Link>
           </nav>
           <a
             href="#ocena"
