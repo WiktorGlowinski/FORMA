@@ -1,12 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { STARTER_MARKS, U14_SQUAD, type Mark, type SquadPlayer } from "@/components/coach/data";
+import {
+  STARTER_MARKS,
+  TRAININGS,
+  U14_SQUAD,
+  type Mark,
+  type SquadPlayer,
+  type TrainingSession,
+  type TrainingStatus,
+} from "@/components/coach/data";
 
 const KEY = "forma-coach-marks-v1";
 const EVENT = "forma-coach-marks";
 const ROSTER_KEY = "forma-coach-roster-v1";
 const ROSTER_EVENT = "forma-coach-roster";
+const TRAININGS_KEY = "forma-coach-trainings-v1";
+const TRAININGS_EVENT = "forma-coach-trainings";
 
 type AllMarks = Record<string, Record<string, Mark>>;
 
@@ -56,6 +66,47 @@ function readRoster(): SquadPlayer[] {
 function writeRoster(next: SquadPlayer[]) {
   window.localStorage.setItem(ROSTER_KEY, JSON.stringify(next));
   window.dispatchEvent(new Event(ROSTER_EVENT));
+}
+
+function isStatus(value: unknown): value is TrainingStatus {
+  return value === "scheduled" || value === "completed" || value === "cancelled";
+}
+
+function isStoredTraining(value: unknown): value is TrainingSession {
+  if (!value || typeof value !== "object") return false;
+  const training = value as TrainingSession;
+  return (
+    typeof training.id === "string" &&
+    training.source === "added" &&
+    typeof training.date === "string" &&
+    typeof training.startTime === "string" &&
+    typeof training.endTime === "string" &&
+    typeof training.place === "string" &&
+    isStatus(training.status)
+  );
+}
+
+function readTrainings(): TrainingSession[] {
+  try {
+    const raw = window.localStorage.getItem(TRAININGS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isStoredTraining).map((training) => ({
+      ...training,
+      teamName: "U14",
+      source: "added" as const,
+      players: U14_SQUAD,
+      topic: training.topic?.trim() || undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function writeTrainings(next: TrainingSession[]) {
+  window.localStorage.setItem(TRAININGS_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(TRAININGS_EVENT));
 }
 
 export function useAllMarks() {
@@ -136,4 +187,70 @@ export function useSquad() {
   }, []);
 
   return { players, extras, ready, addPlayer, removePlayer };
+}
+
+export function useTrainings() {
+  const [added, setAdded] = useState<TrainingSession[]>([]);
+  const [ready, setReady] = useState(false);
+  const trainings = useMemo(() => {
+    return [...added, ...TRAININGS].sort((a, b) =>
+      `${b.date}T${b.startTime}`.localeCompare(`${a.date}T${a.startTime}`),
+    );
+  }, [added]);
+
+  useEffect(() => {
+    const sync = () => setAdded(readTrainings());
+    sync();
+    setReady(true);
+    window.addEventListener(TRAININGS_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(TRAININGS_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
+  const addTraining = useCallback(
+    (input: {
+      date: string;
+      startTime: string;
+      endTime: string;
+      place: string;
+      topic: string;
+      status: TrainingStatus;
+    }) => {
+      const existing = new Set([...TRAININGS.map((training) => training.id), ...readTrainings().map((training) => training.id)]);
+      let id = `u14-${input.date}-${input.startTime.replace(":", "")}`;
+      if (existing.has(id)) id = `${id}-${Date.now().toString(36)}`;
+      const topic = input.topic.trim();
+      const session: TrainingSession = {
+        id,
+        teamName: "U14",
+        date: input.date,
+        startTime: input.startTime,
+        endTime: input.endTime,
+        place: input.place.trim(),
+        topic: topic || undefined,
+        status: input.status,
+        source: "added",
+        players: U14_SQUAD,
+      };
+      writeTrainings([session, ...readTrainings()]);
+    },
+    [],
+  );
+
+  const removeTraining = useCallback((id: string) => {
+    const current = readTrainings();
+    if (!current.some((training) => training.id === id)) return;
+    writeTrainings(current.filter((training) => training.id !== id));
+    const marks = read();
+    if (marks[id]) {
+      const next = { ...marks };
+      delete next[id];
+      write(next);
+    }
+  }, []);
+
+  return { trainings, ready, addTraining, removeTraining };
 }

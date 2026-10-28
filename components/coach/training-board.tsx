@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
-  TRAININGS,
   formatTrainingDate,
   playerName,
   ratedCount,
@@ -13,7 +12,7 @@ import {
   type TrainingSession,
   type TrainingStatus,
 } from "@/components/coach/data";
-import { useAllMarks, useSquad } from "@/components/coach/use-coach-session";
+import { useAllMarks, useSquad, useTrainings } from "@/components/coach/use-coach-session";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<TrainingStatus, string> = {
@@ -25,10 +24,18 @@ const STATUS_LABEL: Record<TrainingStatus, string> = {
 const fieldClass =
   "mt-1 h-11 w-full rounded-md border-2 border-foreground/15 bg-background px-3 text-sm outline-none transition focus:border-foreground/50";
 
+function todayISO() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 export function TrainingBoard() {
   const { all, ready: marksReady } = useAllMarks();
   const { players, ready: squadReady, addPlayer, removePlayer } = useSquad();
-  const ready = marksReady && squadReady;
+  const { trainings, ready: trainingsReady, addTraining, removeTraining } = useTrainings();
+  const ready = marksReady && squadReady && trainingsReady;
 
   return (
     <div>
@@ -37,21 +44,23 @@ export function TrainingBoard() {
         Jednostki do oceny
       </h1>
       <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
-        Po zrealizowanym treningu przechodzisz skład nazwisko po nazwisku. Minus, zero i plus są względem
-        własnego poziomu zawodnika. Zapis zostaje w tej przeglądarce, dopóki nie podepniemy bazy.
+        Dopisz trening albo oceń przykładowy. Po zrealizowanej jednostce przechodzisz skład nazwisko po nazwisku.
+        Minus, zero i plus są względem własnego poziomu zawodnika. Zapis zostaje w tej przeglądarce.
       </p>
 
       {!ready ? (
         <p className="mt-8 text-sm text-muted-foreground">Odczytuję zapis z tej przeglądarki…</p>
       ) : (
         <>
+          <NewTrainingForm trainings={trainings} addTraining={addTraining} />
           <ul className="mt-8 grid gap-4">
-            {TRAININGS.map((training) => (
+            {trainings.map((training) => (
               <TrainingCard
                 key={training.id}
                 training={training}
                 players={players}
                 marks={all[training.id] ?? {}}
+                onRemove={removeTraining}
               />
             ))}
           </ul>
@@ -62,14 +71,130 @@ export function TrainingBoard() {
   );
 }
 
+function NewTrainingForm({
+  trainings,
+  addTraining,
+}: {
+  trainings: TrainingSession[];
+  addTraining: (input: {
+    date: string;
+    startTime: string;
+    endTime: string;
+    place: string;
+    topic: string;
+    status: TrainingStatus;
+  }) => void;
+}) {
+  const [date, setDate] = useState(todayISO);
+  const [startTime, setStartTime] = useState("17:30");
+  const [endTime, setEndTime] = useState("18:45");
+  const [place, setPlace] = useState("");
+  const [topic, setTopic] = useState("");
+  const [status, setStatus] = useState<TrainingStatus>("completed");
+  const [error, setError] = useState("");
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!date) {
+      setError("Wpisz datę.");
+      return;
+    }
+    if (!startTime || !endTime) {
+      setError("Podaj godzinę rozpoczęcia i zakończenia.");
+      return;
+    }
+    if (endTime <= startTime) {
+      setError("Koniec ma być później niż początek.");
+      return;
+    }
+    if (!place.trim()) {
+      setError("Wpisz miejsce.");
+      return;
+    }
+    if (trainings.some((training) => training.date === date && training.startTime === startTime)) {
+      setError("Taka jednostka już jest na liście. Zmień godzinę albo datę.");
+      return;
+    }
+    addTraining({ date, startTime, endTime, place, topic, status });
+    setTopic("");
+    setError("");
+  }
+
+  return (
+    <section className="print-card mt-8 overflow-hidden rounded-md border-2 border-foreground/15 bg-card">
+      <div className="mow-stripes px-4 py-3 text-chalk sm:px-5">
+        <p className="text-sm font-medium">Nowa jednostka U14</p>
+      </div>
+      <form onSubmit={submit} className="px-4 py-5 sm:px-5">
+        <h2 className="font-heading text-3xl tracking-tight">Dopisz trening</h2>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+          Status „Zrealizowany” od razu otwiera ocenę składu. Zaplanowany i odwołany zostają na liście bez ocen.
+        </p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="block text-sm">
+            <span className="text-muted-foreground">Data</span>
+            <input className={fieldClass} type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          </label>
+          <label className="block text-sm">
+            <span className="text-muted-foreground">Od</span>
+            <input className={fieldClass} type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} />
+          </label>
+          <label className="block text-sm">
+            <span className="text-muted-foreground">Do</span>
+            <input className={fieldClass} type="time" value={endTime} onChange={(event) => setEndTime(event.target.value)} />
+          </label>
+          <label className="block text-sm">
+            <span className="text-muted-foreground">Miejsce</span>
+            <input
+              className={fieldClass}
+              value={place}
+              autoComplete="off"
+              placeholder="Boisko główne"
+              onChange={(event) => setPlace(event.target.value)}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-muted-foreground">Temat</span>
+            <input
+              className={fieldClass}
+              value={topic}
+              autoComplete="off"
+              placeholder="Np. gra po odbiorze"
+              onChange={(event) => setTopic(event.target.value)}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-muted-foreground">Status</span>
+            <select className={fieldClass} value={status} onChange={(event) => setStatus(event.target.value as TrainingStatus)}>
+              <option value="completed">Zrealizowany</option>
+              <option value="scheduled">Zaplanowany</option>
+              <option value="cancelled">Odwołany</option>
+            </select>
+          </label>
+        </div>
+        {error ? (
+          <p className="mt-3 text-sm text-minus" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <Button type="submit" size="lg" className="mt-4 h-11 px-4">
+          Dodaj jednostkę
+        </Button>
+      </form>
+    </section>
+  );
+}
+
 function TrainingCard({
   training,
   players,
   marks,
+  onRemove,
 }: {
   training: TrainingSession;
   players: SquadPlayer[];
   marks: Record<string, Mark>;
+  onRemove: (id: string) => void;
 }) {
   const done = ratedCount(players, marks);
   const total = players.length;
@@ -88,6 +213,9 @@ function TrainingCard({
       <div className="flex flex-col gap-4 px-4 py-5 sm:flex-row sm:items-end sm:justify-between sm:px-5">
         <div>
           <p className="text-xs tracking-[0.14em] text-muted-foreground uppercase">{STATUS_LABEL[training.status]}</p>
+          {training.source === "added" ? (
+            <p className="mt-1 text-xs tracking-[0.14em] text-primary uppercase">Dopisana w tej przeglądarce</p>
+          ) : null}
           <h2 className="mt-1 font-heading text-3xl tracking-tight">{training.place}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {training.topic ?? "Bez tematu"} · {total} zawodników
@@ -105,14 +233,21 @@ function TrainingCard({
             </p>
           )}
         </div>
-        {open ? (
-          <Link
-            href={`/trener/${training.id}`}
-            className={cn(buttonVariants({ size: "lg", variant: finished ? "outline" : "default" }), "h-11 px-4")}
-          >
-            {finished ? "Popraw zapis" : started ? "Dokończ ocenę" : "Oceń skład"}
-          </Link>
-        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {open ? (
+            <Link
+              href={`/trener/${training.id}`}
+              className={cn(buttonVariants({ size: "lg", variant: finished ? "outline" : "default" }), "h-11 px-4")}
+            >
+              {finished ? "Popraw zapis" : started ? "Dokończ ocenę" : "Oceń skład"}
+            </Link>
+          ) : null}
+          {training.source === "added" ? (
+            <Button type="button" variant="outline" size="lg" className="h-11 px-4" onClick={() => onRemove(training.id)}>
+              Usuń
+            </Button>
+          ) : null}
+        </div>
       </div>
     </li>
   );

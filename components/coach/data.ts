@@ -24,6 +24,7 @@ export interface TrainingSession {
   place: string;
   topic?: string;
   status: TrainingStatus;
+  source: "sample" | "added";
   players: SquadPlayer[];
 }
 
@@ -70,6 +71,7 @@ export const TRAININGS: TrainingSession[] = [
     place: "Boisko główne",
     topic: "Gra do przodu po odbiorze",
     status: "completed",
+    source: "sample",
     players: U14_SQUAD,
   },
   {
@@ -81,6 +83,7 @@ export const TRAININGS: TrainingSession[] = [
     place: "Boisko główne",
     topic: "Pressing po stracie",
     status: "completed",
+    source: "sample",
     players: U14_SQUAD,
   },
   {
@@ -92,6 +95,7 @@ export const TRAININGS: TrainingSession[] = [
     place: "Hala",
     topic: "Gra w przewadze",
     status: "scheduled",
+    source: "sample",
     players: U14_SQUAD,
   },
   {
@@ -102,6 +106,7 @@ export const TRAININGS: TrainingSession[] = [
     endTime: "17:15",
     place: "Boisko boczne",
     status: "cancelled",
+    source: "sample",
     players: U14_SQUAD,
   },
 ];
@@ -113,10 +118,6 @@ export const STARTER_MARKS: Record<string, Record<string, Mark>> = {
     oliwia: { type: "score", score: "+" },
   },
 };
-
-export function getTraining(id: string) {
-  return TRAININGS.find((training) => training.id === id);
-}
 
 export function playerName(player: SquadPlayer) {
   return `${player.firstName} ${player.lastName}`;

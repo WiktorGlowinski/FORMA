@@ -8,7 +8,6 @@ import {
   ABSENCE_REASONS,
   INJURY_KINDS,
   SCORE_OPTIONS,
-  getTraining,
   markLabel,
   playerName,
   ratedCount,
@@ -19,7 +18,7 @@ import {
   type SquadPlayer,
 } from "@/components/coach/data";
 import { InjuryIcon } from "@/components/coach/injury-icon";
-import { useSquad, useTrainingMarks } from "@/components/coach/use-coach-session";
+import { useSquad, useTrainingMarks, useTrainings } from "@/components/coach/use-coach-session";
 import { cn } from "@/lib/utils";
 
 const SCORE_TONE: Record<EvaluationScore, string> = {
@@ -29,13 +28,18 @@ const SCORE_TONE: Record<EvaluationScore, string> = {
 };
 
 export function QuickEvaluation({ trainingId }: { trainingId: string }) {
-  const training = getTraining(trainingId);
+  const { trainings, ready: listReady } = useTrainings();
   const { players, ready: squadReady } = useSquad();
   const { marks, ready: marksReady, setMark, clearTraining } = useTrainingMarks(trainingId);
   const [index, setIndex] = useState(0);
   const [absenceOpen, setAbsenceOpen] = useState(false);
   const [injuryOpen, setInjuryOpen] = useState(false);
-  const ready = squadReady && marksReady;
+  const training = trainings.find((item) => item.id === trainingId);
+  const ready = listReady && squadReady && marksReady;
+
+  if (!ready) {
+    return <p className="text-sm text-muted-foreground">Odczytuję zapis tej jednostki…</p>;
+  }
 
   if (!training) {
     return (
@@ -66,10 +70,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         </Link>
       </div>
     );
-  }
-
-  if (!ready) {
-    return <p className="text-sm text-muted-foreground">Odczytuję zapis tej jednostki…</p>;
   }
 
   const total = players.length;
@@ -111,7 +111,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
           <h1 className="mt-2 font-heading text-4xl tracking-tight sm:text-5xl">Jeden zawodnik. Trzy przyciski.</h1>
         </div>
         <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-          {training.place}. {training.topic}. Zapis zostaje w tej przeglądarce, nawet po odświeżeniu.
+          {training.place}. {training.topic ?? "Bez tematu"}. Zapis zostaje w tej przeglądarce, nawet po odświeżeniu.
         </p>
       </div>
 
@@ -134,12 +134,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         </div>
 
         {finished || !player ? (
-          <Summary
-            players={players}
-            marks={marks}
-            onEdit={goTo}
-            onReset={restart}
-          />
+          <Summary players={players} marks={marks} onEdit={goTo} onReset={restart} />
         ) : (
           <PlayerStep
             player={player}
