@@ -15,32 +15,58 @@ export function SiteHeader() {
     setOpen(false);
   }
 
+  function scrollToSection(e: React.MouseEvent<HTMLAnchorElement>, targetId: string) {
+    e.preventDefault();
+    close();
+
+    const element = document.getElementById(targetId);
+    if (element) {
+      const topOffset = element.getBoundingClientRect().top + window.scrollY - 80;
+      window.scrollTo({
+        top: topOffset,
+        behavior: "smooth",
+      });
+      window.history.pushState(null, "", `#${targetId}`);
+    }
+  }
+
   return (
-    <header className="sticky top-0 z-40 border-b-2 border-foreground/15 bg-background/90 backdrop-blur-sm">
+    <header className="sticky top-0 z-50 border-b-2 border-foreground/15 bg-background/90 backdrop-blur-md transition-all">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <a href="#gora" className="group flex items-center gap-2.5 text-foreground" onClick={close}>
+        <a
+          href="#gora"
+          className="group flex items-center gap-2.5 text-foreground"
+          onClick={(e) => scrollToSection(e, "gora")}
+        >
           <PitchMark className="size-7 text-primary transition-transform duration-200 group-hover:rotate-12" />
           <span className="font-heading text-[1.85rem] leading-none tracking-wide uppercase">Forma</span>
         </a>
 
+        {/* Linki sekcji */}
         <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex" aria-label="Sekcje strony">
-          {NAV.map((item) => (
-            <a key={item.href} href={item.href} className="pitch-link">
-              {item.label}
-            </a>
-          ))}
-          <Link href="/trener" className="pitch-link">
-            Panel trenera
-          </Link>
+          {NAV.map((item) => {
+            const targetId = item.href.replace("#", "");
+            return (
+              <a
+                key={item.href}
+                href={item.href}
+                onClick={(e) => scrollToSection(e, targetId)}
+                className="pitch-link cursor-pointer"
+              >
+                {item.label}
+              </a>
+            );
+          })}
         </nav>
 
-        {/* Przyciski nawigacji na desktopie */}
+        {/* Prawa strona */}
         <div className="hidden items-center gap-3 md:flex">
           <a
             href="#ocena"
+            onClick={(e) => scrollToSection(e, "ocena")}
             className={cn(
               buttonVariants({ variant: "outline", size: "lg" }),
-              "h-10 border-2 border-foreground/20 px-4 transition-transform hover:-translate-y-0.5 hover:border-foreground hover:shadow-[3px_3px_0_0_var(--foreground)]"
+              "h-10 cursor-pointer border-2 border-foreground/20 px-4 transition-transform hover:-translate-y-0.5 hover:border-foreground hover:shadow-[3px_3px_0_0_var(--foreground)]"
             )}
           >
             Wypróbuj demo
@@ -56,7 +82,7 @@ export function SiteHeader() {
           </Link>
         </div>
 
-        {/* Przycisk menu mobilnego */}
+        {/* Mobile menu toggle */}
         <button
           type="button"
           className="inline-flex size-10 items-center justify-center rounded-lg border border-border md:hidden"
@@ -69,28 +95,27 @@ export function SiteHeader() {
         </button>
       </div>
 
-      {/* Rozwijane menu na telefonie */}
       {open ? (
         <div id="menu-mobilne" className="border-t border-border px-4 py-4 md:hidden">
           <nav className="flex flex-col gap-1" aria-label="Sekcje strony">
-            {NAV.map((item) => (
-              <a
-                key={item.href}
-                href={item.href}
-                onClick={close}
-                className="pitch-link rounded-lg px-3 py-3 text-base hover:bg-accent"
-              >
-                {item.label}
-              </a>
-            ))}
-            <Link href="/trener" onClick={close} className="rounded-lg px-3 py-3 text-base hover:bg-accent">
-              Panel trenera
-            </Link>
+            {NAV.map((item) => {
+              const targetId = item.href.replace("#", "");
+              return (
+                <a
+                  key={item.href}
+                  href={item.href}
+                  onClick={(e) => scrollToSection(e, targetId)}
+                  className="pitch-link rounded-lg px-3 py-3 text-base hover:bg-accent"
+                >
+                  {item.label}
+                </a>
+              );
+            })}
           </nav>
           <div className="mt-4 flex flex-col gap-2">
             <a
               href="#ocena"
-              onClick={close}
+              onClick={(e) => scrollToSection(e, "ocena")}
               className={cn(
                 buttonVariants({ variant: "outline", size: "lg" }),
                 "h-11 w-full border-2 border-foreground/20 text-center"

@@ -1,3 +1,5 @@
+"use client";
+
 import { ArrowRight, ClipboardCheck, MessagesSquare, Users } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { EvalDemo } from "@/components/landing/eval-demo";
@@ -52,11 +54,26 @@ const SAMPLE_BARS = [
 const SAMPLE_TIMELINE = ["0", "+", "0", "−", "−", "0", "nb", "−"] as const;
 
 export function PitchHome() {
+  function scrollToTarget(e: React.MouseEvent<HTMLAnchorElement>, targetId: string) {
+    e.preventDefault();
+    const element = document.getElementById(targetId);
+    if (element) {
+      const topOffset = element.getBoundingClientRect().top + window.scrollY - 80;
+      window.scrollTo({ top: topOffset, behavior: "smooth" });
+      window.history.pushState(null, "", `#${targetId}`);
+    }
+  }
+
   return (
-    <div id="gora" className="relative flex min-h-full flex-1 flex-col overflow-x-hidden">
-      <PitchArt className="pointer-events-none absolute top-24 -right-[18%] hidden w-[680px] text-foreground/10 lg:block" />
-      <BallMark className="pointer-events-none absolute top-[38rem] left-[6%] hidden size-16 text-foreground/10 lg:block" />
+    <div id="gora" className="relative flex min-h-full flex-1 flex-col">
+      {/* Warstwa dekoracyjna - bezpiecznie przycięta w tle bez psucia scrolla */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <PitchArt className="absolute top-24 -right-[18%] hidden w-[680px] text-foreground/10 lg:block" />
+        <BallMark className="absolute top-[38rem] left-[6%] hidden size-16 text-foreground/10 lg:block" />
+      </div>
+
       <SiteHeader />
+
       <main className="flex-1">
         <section className="group/hero relative overflow-hidden">
           <PitchLines />
@@ -76,9 +93,10 @@ export function PitchHome() {
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <a
                   href="#ocena"
+                  onClick={(e) => scrollToTarget(e, "ocena")}
                   className={cn(
                     buttonVariants({ size: "lg" }),
-                    "h-12 px-5 text-base transition-transform hover:-translate-y-0.5 hover:shadow-[4px_4px_0_0_var(--foreground)]",
+                    "h-12 cursor-pointer px-5 text-base transition-transform hover:-translate-y-0.5 hover:shadow-[4px_4px_0_0_var(--foreground)]",
                   )}
                 >
                   Wypróbuj szybką ocenę
@@ -86,9 +104,10 @@ export function PitchHome() {
                 </a>
                 <a
                   href="#skala"
+                  onClick={(e) => scrollToTarget(e, "skala")}
                   className={cn(
                     buttonVariants({ variant: "outline", size: "lg" }),
-                    "h-12 border-2 border-foreground/20 px-5 text-base transition-transform hover:-translate-y-0.5 hover:border-foreground hover:bg-accent hover:shadow-[4px_4px_0_0_var(--foreground)]",
+                    "h-12 cursor-pointer border-2 border-foreground/20 px-5 text-base transition-transform hover:-translate-y-0.5 hover:border-foreground hover:bg-accent hover:shadow-[4px_4px_0_0_var(--foreground)]",
                   )}
                 >
                   Jak czytać skalę
@@ -126,7 +145,10 @@ export function PitchHome() {
         </section>
 
         <div className="mx-auto flex max-w-6xl flex-col gap-20 px-4 py-6 sm:px-6 sm:py-10">
-          <EvalDemo />
+          {/* Gwarantowany wrapper z ID="ocena" i marginesem pod sticky header */}
+          <section id="ocena" className="scroll-mt-24">
+            <EvalDemo />
+          </section>
 
           <section id="skala" className="scroll-mt-24" aria-labelledby="skala-tytul">
             <div className="max-w-2xl">
