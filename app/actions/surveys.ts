@@ -1,7 +1,6 @@
 'use server';
 
 import { supabaseAdmin } from '@/lib/supabase-admin';
-import { randomUUID } from 'crypto';
 
 export interface SurveyPublicData {
   token: string;
@@ -13,129 +12,71 @@ export interface SurveyPublicData {
 
 export interface SubmitSurveyPayload {
   token: string;
-  fatigueRating: number;      // skala 1-5 (BR-036)
-  satisfactionRating: number; // skala 1-5 (BR-036)
-  comment?: string;
+  fatigue: number;
+  satisfaction: number;
+  feedbackNote?: string;
+}
+
+export interface TrainingSurveyInfo {
+  trainingId: string;
+  date: string;
+  topic: string | null;
+  pendingPlayers: Array<{
+    id: string;
+    firstName: string;
+    lastName: string;
+    jerseyNumber: number | null;
+  }>;
 }
 
 /**
- * 1. Generuje unikalne tokeny ankiet dla wszystkich zawodników obecnych na treningu
- * Czas ważności (TTL): 24 godziny
+ * 1. Pobiera dane treningu i listę obecnych zawodników, którzy jeszcze NIE wypełnili ankiety
  */
-export async function generateTrainingSurveys(trainingId: string) {
+export async function getTrainingSurveySession(trainingId: string): Promise<{
+  success: boolean;
+  data?: TrainingSurveyInfo;
+  error?: string;
+}> {
   try {
-    // Pobierz trening
-    const { data: training, error: trError } = await supabaseAdmin
+    const { data: training, error: trErr } = await supabaseAdmin
       .from('trainings')
-      .select('id, club_id')
+      .select('id, date, topic, survey_enabled')
       .eq('id', trainingId)
       .single();
 
-    if (trError || !training) {
-      return { success: false, error: 'Nie znaleziono treningu' };
+    if (trErr || !training) {
+      return { success: false, error: 'Nie znaleziono jednostki treningowej.' };
     }
 
-    // Pobierz obecnych zawodników z ocen tego treningu
-    const { data: evaluations, error: evError } = await supabaseAdmin
-      .from('evaluations')
-      .select('player_id')
-      .eq('training_id', trainingId)
-      .eq('is_present', true);
-
-    if (evError || !evaluations || evaluations.length === 0) {
-      return { success: false, error: 'Brak obecnych zawodników do wygenerowania ankiet' };
-    }
-
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 24);
-
-    // Przygotuj rekordy ankiet
-    const surveysToInsert = evaluations.map((ev) => ({
-      club_id: training.club_id,
-      training_id: training.id,
-      player_id: ev.player_id,
-      token: randomUUID(),
-      status: 'pending',
-      expires_at: expiresAt.toISOString(),
-    }));
-
-    const { data: insertedSurveys, error: insertError } = await supabaseAdmin
-      .from('post_training_surveys')
-      .upsert(surveysToInsert, { onConflict: 'training_id,player_id' })
-      .select('token, player_id');
-
-    if (insertError) {
-      return { success: false, error: insertError.message };
-    }
-
-    return { 
-      success: true, 
-      count: insertedSurveys.length, 
-      surveys: insertedSurveys 
-    };
-  } catch (err: any) {
-    return { success: false, error: err.message };
-  }
-}
-
-/**
- * 2. Pobiera dane ankiety na podstawie tokenu z URL (dla ekranu bez logowania)
- * Weryfikuje czy token nie wygasł i nie został już wypełniony
- */
-export async function getSurveyByToken(token: string): Promise<{
-  success: boolean;
-  data?: SurveyPublicData;
-  error?: string;
-  isExpiredOrCompleted?: boolean;
-}> {
-  try {
-    const { data: survey, error } = await supabaseAdmin
+    const { data: surveys, error: survErr } = await supabaseAdmin
       .from('post_training_surveys')
       .select(`
-        token,
-        status,
-        expires_at,
-        completed_at,
-        club_id,
-        players!inner ( first_name, last_name ),
-        trainings!inner ( date, topic )
+        player_id,
+        is_completed,
+        players!inner ( id, first_name, last_name, jersey_number )
       `)
-      .eq('token', token)
-      .single();
+      .eq('training_id', trainingId)
+      .eq('is_completed', false);
 
-    if (error || !survey) {
-      return { success: false, error: 'Nieprawidłowy lub nieistniejący link ankiety.' };
-    }
+    if (survErr) throw survErr;
 
-    // Weryfikacja czy ankieta została już odesłana
-    if (survey.completed_at || survey.status === 'completed') {
-      return { 
-        success: false, 
-        isExpiredOrCompleted: true, 
-        error: 'Ta ankieta została już wcześniej wypełniona.' 
+    const pendingPlayers = (surveys || []).map((s: any) => {
+      const p = Array.isArray(s.players) ? s.players[0] : s.players;
+      return {
+        id: p.id,
+        firstName: p.first_name,
+        lastName: p.last_name,
+        jerseyNumber: p.jersey_number ?? null,
       };
-    }
-
-    // Weryfikacja TTL
-    if (new Date(survey.expires_at) < new Date()) {
-      return { 
-        success: false, 
-        isExpiredOrCompleted: true, 
-        error: 'Link do tej ankiety wygasł (czas na wypełnienie minął).' 
-      };
-    }
-
-    const player: any = survey.players;
-    const training: any = survey.trainings;
+    }).sort((a, b) => (a.jerseyNumber ?? 99) - (b.jerseyNumber ?? 99));
 
     return {
       success: true,
       data: {
-        token: survey.token,
-        clubId: survey.club_id,
-        playerName: `${player.first_name} ${player.last_name}`,
-        trainingDate: training.date,
-        trainingTopic: training.topic,
+        trainingId: training.id,
+        date: training.date,
+        topic: training.topic,
+        pendingPlayers,
       },
     };
   } catch (err: any) {
@@ -144,51 +85,68 @@ export async function getSurveyByToken(token: string): Promise<{
 }
 
 /**
- * 3. Zapisuje odpowiedź zawodnika / rodzica i natychmiast unieważnia token
+ * 2. Zapisuje odpowiedź z weryfikacją tożsamości (sprawdzenie roku urodzenia)
  */
-export async function submitSurveyResponse(payload: SubmitSurveyPayload) {
+export async function submitGroupSurveyResponse(payload: {
+  trainingId: string;
+  playerId: string;
+  birthYear: number;
+  fatigue: number;
+  satisfaction: number;
+  feedbackNote?: string;
+}) {
   try {
-    const { token, fatigueRating, satisfactionRating, comment } = payload;
+    const { trainingId, playerId, birthYear, fatigue, satisfaction, feedbackNote } = payload;
 
-    // Walidacja biznesowa zakresu ocen 1-5
-    if (fatigueRating < 1 || fatigueRating > 5 || satisfactionRating < 1 || satisfactionRating > 5) {
-      return { success: false, error: 'Oceny muszą mieścić się w przedziale od 1 do 5.' };
+    if (!birthYear || isNaN(birthYear)) {
+      return { success: false, error: 'Podaj poprawny rok urodzenia (np. 2008).' };
     }
 
-    // Sprawdź stan tokenu przed aktualizacją
-    const { data: survey, error: checkError } = await supabaseAdmin
-      .from('post_training_surveys')
-      .select('id, status, expires_at, completed_at')
-      .eq('token', token)
+    if (fatigue < 1 || fatigue > 5 || satisfaction < 1 || satisfaction > 5) {
+      return { success: false, error: 'Oceny muszą mieścić się w przedziale 1–5.' };
+    }
+
+    const { data: player, error: plErr } = await supabaseAdmin
+      .from('players')
+      .select('*')
+      .eq('id', playerId)
       .single();
 
-    if (checkError || !survey) {
-      return { success: false, error: 'Nieprawidłowy token.' };
+    if (plErr || !player) {
+      return { success: false, error: 'Nie znaleziono wybranego zawodnika.' };
     }
 
-    if (survey.completed_at || survey.status === 'completed') {
-      return { success: false, error: 'Ankieta została już wysłana.' };
+    let expectedYear: number | null = null;
+    if (player.birth_year) {
+      expectedYear = Number(player.birth_year);
+    } else if (player.birth_date || player.date_of_birth) {
+      const parsedDate = new Date(player.birth_date || player.date_of_birth);
+      if (!isNaN(parsedDate.getTime())) {
+        expectedYear = parsedDate.getFullYear();
+      }
     }
 
-    if (new Date(survey.expires_at) < new Date()) {
-      return { success: false, error: 'Czas na wypełnienie ankiety upłynął.' };
+    if (expectedYear !== null && expectedYear !== birthYear) {
+      return {
+        success: false,
+        error: 'Podany rok urodzenia nie zgadza się z danymi zawodnika. Sprawdź, czy na pewno wybrałeś swoje nazwisko.',
+      };
     }
 
-    // Zapis odpowiedzi
     const { error: updateError } = await supabaseAdmin
       .from('post_training_surveys')
       .update({
-        fatigue_rating: fatigueRating,
-        satisfaction_rating: satisfactionRating,
-        comment: comment?.trim() || null,
-        status: 'completed',
+        fatigue,
+        satisfaction,
+        feedback_note: feedbackNote?.trim() || null,
+        is_completed: true,
         completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
-      .eq('id', survey.id);
+      .eq('training_id', trainingId)
+      .eq('player_id', playerId);
 
-    if (updateError) {
-      return { success: false, error: updateError.message };
-    }
+    if (updateError) throw updateError;
 
     return { success: true };
   } catch (err: any) {

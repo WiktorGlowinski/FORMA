@@ -20,6 +20,9 @@ export interface DbTrainingCard {
   organizationalNote?: string;
   evaluatedCount: number;
   totalPlayers: number;
+  leadCoachId: string | null;
+  leadCoachName: string;
+  isOwner: boolean;
 }
 
 export interface SurveyStatusItem {
@@ -34,7 +37,7 @@ export interface SurveyStatusItem {
 }
 
 /**
- * 1. Pobiera listę jednostek treningowych i zespołów przypisanych do trenera (RLS)
+ * 1. Pobiera listę jednostek treningowych i zespołów z oznaczeniem autora jednostki
  */
 export async function getCoachTrainingsAction() {
   try {
@@ -57,6 +60,7 @@ export async function getCoachTrainingsAction() {
       .select(`
         id,
         team_id,
+        lead_coach_id,
         date,
         start_time,
         end_time,
@@ -66,7 +70,8 @@ export async function getCoachTrainingsAction() {
         training_type,
         organizational_note,
         status,
-        teams ( id, name )
+        teams ( id, name ),
+        lead_coach:profiles!trainings_lead_coach_id_fkey ( full_name )
       `)
       .order("date", { ascending: false });
 
@@ -104,6 +109,11 @@ export async function getCoachTrainingsAction() {
     const formattedTrainings: DbTrainingCard[] = (trainings || []).map((t: any) => {
       const tId = t.team_id;
       const teamObj = Array.isArray(t.teams) ? t.teams[0] : t.teams;
+      const coachProfile = Array.isArray(t.lead_coach) ? t.lead_coach[0] : t.lead_coach;
+
+      const isOwner = !t.lead_coach_id || t.lead_coach_id === user.id;
+      const leadCoachName = coachProfile?.full_name || (isOwner ? "Twój profil" : "Inny trener");
+
       return {
         id: t.id,
         teamId: tId,
@@ -119,6 +129,9 @@ export async function getCoachTrainingsAction() {
         status: t.status || "scheduled",
         evaluatedCount: evalsByTraining[t.id] || 0,
         totalPlayers: playersCountByTeam[tId] || 0,
+        leadCoachId: t.lead_coach_id,
+        leadCoachName,
+        isOwner,
       };
     });
 
@@ -133,7 +146,7 @@ export async function getCoachTrainingsAction() {
 }
 
 /**
- * 2. Tworzy nową jednostkę treningową (RLS: status 'scheduled' lub 'completed')
+ * 2. Tworzy nową jednostkę treningową
  */
 export async function createTrainingAction(payload: {
   teamId: string;
@@ -195,7 +208,7 @@ export async function createTrainingAction(payload: {
 }
 
 /**
- * 3. Pobiera dane jednostki, kadrę oraz dotychczas wystawione oceny
+ * 3. Pobiera dane pojedynczej jednostki, kadrę oraz status właściciela (isOwner)
  */
 export async function getTrainingEvaluationDataAction(trainingId: string) {
   try {
@@ -217,6 +230,7 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
         topic,
         status,
         team_id,
+        lead_coach_id,
         teams ( id, name )
       `)
       .eq("id", trainingId)
@@ -226,11 +240,25 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       return { success: false, error: "Nie znaleziono jednostki lub brak do niej uprawnień." };
     }
 
+    let leadCoachName = "Trener prowadzący";
+    if (training.lead_coach_id) {
+      const { data: coachProfile } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", training.lead_coach_id)
+        .maybeSingle();
+
+      if (coachProfile?.full_name) {
+        leadCoachName = coachProfile.full_name;
+      }
+    }
+
+    const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
     const teamObj = Array.isArray(training.teams) ? training.teams[0] : training.teams;
 
     const { data: rawPlayers, error: plErr } = await supabase
       .from("players")
-      .select("id, first_name, last_name, jersey_number")
+      .select("id, first_name, last_name, jersey_number, avatar_url, parent_name, parent_phone, phone")
       .eq("current_team_id", training.team_id)
       .order("jersey_number", { ascending: true, nullsFirst: false });
 
@@ -242,6 +270,10 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       lastName: p.last_name,
       jerseyNumber: p.jersey_number || 0,
       role: "Zawodnik",
+      avatarUrl: p.avatar_url || null,
+      parentName: p.parent_name || null,
+      parentPhone: p.parent_phone || null,
+      phone: p.phone || null,
     }));
 
     const { data: rawEvals, error: evErr } = await supabase
@@ -256,7 +288,7 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       if (!row.is_present) {
         initialMarks[row.player_id] = {
           type: "absence",
-          reason: row.absence_reason || "unexcused",
+          reason: row.absence_reason || "nieusprawiedliwiona",
           injury: row.comment?.startsWith("Uraz: ") ? row.comment.replace("Uraz: ", "") : undefined,
         };
       } else if (row.score) {
@@ -278,6 +310,8 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
         place: training.location || "Boisko główne",
         topic: training.topic || undefined,
         status: training.status,
+        isOwner,
+        leadCoachName,
       },
       squad,
       initialMarks,
@@ -288,7 +322,7 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
 }
 
 /**
- * 4. Zapisuje pojedynczą ocenę zawodnika w locie (upsert)
+ * 4. Zapisuje pojedynczą ocenę zawodnika w locie (blokada obcego trenera)
  */
 export async function savePlayerMarkAction(trainingId: string, playerId: string, mark: Mark) {
   try {
@@ -299,11 +333,15 @@ export async function savePlayerMarkAction(trainingId: string, playerId: string,
 
     const { data: tr } = await supabase
       .from("trainings")
-      .select("club_id")
+      .select("club_id, lead_coach_id")
       .eq("id", trainingId)
       .single();
 
     if (!tr) return { success: false, error: "Nie znaleziono jednostki." };
+
+    if (tr.lead_coach_id && tr.lead_coach_id !== user.id) {
+      return { success: false, error: "Nie możesz modyfikować ocen w jednostce innego trenera." };
+    }
 
     const isPresent = mark.type === "score";
     const scoreVal = mark.type === "score" ? mark.score : null;
@@ -337,7 +375,7 @@ export async function savePlayerMarkAction(trainingId: string, playerId: string,
 }
 
 /**
- * 5. Resetuje oceny jednostki treningowej (DELETE)
+ * 5. Resetuje oceny jednostki treningowej (blokada obcego trenera)
  */
 export async function resetTrainingEvaluationsAction(trainingId: string) {
   try {
@@ -345,6 +383,18 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) return { success: false, error: "Brak autoryzacji." };
+
+    const { data: tr } = await supabase
+      .from("trainings")
+      .select("lead_coach_id")
+      .eq("id", trainingId)
+      .single();
+
+    if (!tr) return { success: false, error: "Nie znaleziono jednostki." };
+
+    if (tr.lead_coach_id && tr.lead_coach_id !== user.id) {
+      return { success: false, error: "Brak uprawnień do resetowania ocen w tym treningu." };
+    }
 
     const { error } = await supabase
       .from("evaluations")
@@ -373,11 +423,15 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     const { data: training, error: trErr } = await supabase
       .from("trainings")
-      .select("id, club_id")
+      .select("id, club_id, lead_coach_id")
       .eq("id", trainingId)
       .single();
 
     if (trErr || !training) return { success: false, error: "Trening nie istnieje lub brak dostępu." };
+
+    if (training.lead_coach_id && training.lead_coach_id !== user.id) {
+      return { success: false, error: "Tylko trener prowadzący może aktywować ankietę." };
+    }
 
     const { data: presentEvals, error: evErr } = await supabase
       .from("evaluations")
@@ -430,7 +484,7 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 }
 
 /**
- * 7. Pobiera listę ankiet RPE i uniwersalny tekst do udostępnienia (RLS)
+ * 7. Pobiera listę ankiet RPE
  */
 export async function getTrainingSurveysStatusAction(trainingId: string): Promise<{
   success: boolean;
