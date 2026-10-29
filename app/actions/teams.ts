@@ -1,6 +1,6 @@
 'use server';
 
-import { supabaseAdmin } from '@/lib/supabase-admin';
+import { createClient } from '@/lib/supabase-server';
 
 export interface TeamItem {
   id: string;
@@ -9,16 +9,15 @@ export interface TeamItem {
   playersCount?: number;
 }
 
-/**
- * Pobiera listę drużyn należących do danego klubu (np. do rozwijanego menu w nagłówku)
- */
 export async function getClubTeams(clubId: string): Promise<{
   success: boolean;
   teams: TeamItem[];
   error?: string;
 }> {
   try {
-    const { data, error } = await supabaseAdmin
+    const supabase = await createClient();
+
+    const { data, error } = await supabase
       .from('teams')
       .select(`
         id,

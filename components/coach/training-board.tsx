@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: "Zaplanowany",
+  planned: "Zaplanowany",
   completed: "Zrealizowany",
   cancelled: "Odwołany",
 };

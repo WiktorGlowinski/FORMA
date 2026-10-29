@@ -1,6 +1,6 @@
 'use server';
 
-import { supabaseAdmin } from '@/lib/supabase-admin';
+import { createClient } from '@/lib/supabase-server';
 
 export interface TeamAlert {
   playerId: string;
@@ -85,8 +85,10 @@ export async function getTeamAlerts(teamId: string): Promise<{
       return { success: false, error: 'Nie podano identyfikatora drużyny.', alerts: [] };
     }
 
+    const supabase = await createClient();
+
     // Pobierz ostatnie 6 treningów drużyny
-    const { data: recentTrainings, error: trErr } = await supabaseAdmin
+    const { data: recentTrainings, error: trErr } = await supabase
       .from('trainings')
       .select('id, date')
       .eq('team_id', teamId)
@@ -101,14 +103,10 @@ export async function getTeamAlerts(teamId: string): Promise<{
     const latestTraining = recentTrainings[0];
 
     // Pobierz oceny i powiązanych zawodników
-    const { data: evals, error: evErr } = await supabaseAdmin
+    const { data: evals, error: evErr } = await supabase
       .from('evaluations')
       .select(`
-        training_id,
-        player_id,
-        score,
-        is_present,
-        absence_reason,
+        *,
         players!inner ( id, first_name, last_name, jersey_number )
       `)
       .in('training_id', trainingIds);
@@ -118,11 +116,10 @@ export async function getTeamAlerts(teamId: string): Promise<{
     }
 
     // Pobierz ankiety RPE z tych jednostek
-    const { data: surveys } = await supabaseAdmin
+    const { data: surveys } = await supabase
       .from('post_training_surveys')
       .select('training_id, player_id, fatigue_rating, satisfaction_rating')
-      .in('training_id', trainingIds)
-      .eq('status', 'completed');
+      .in('training_id', trainingIds);
 
     const alerts: TeamAlert[] = [];
 
@@ -143,27 +140,29 @@ export async function getTeamAlerts(teamId: string): Promise<{
     > = {};
 
     (evals || []).forEach((e: any) => {
+      const p = Array.isArray(e.players) ? e.players[0] : e.players;
       if (!playerMap[e.player_id]) {
         playerMap[e.player_id] = {
-          name: `${e.players.first_name} ${e.players.last_name}`,
-          jerseyNumber: e.players.jersey_number,
+          name: p ? `${p.first_name} ${p.last_name}` : 'Zawodnik',
+          jerseyNumber: p?.jersey_number ?? null,
           history: [],
         };
       }
 
       const tr = recentTrainings.find((t) => t.id === e.training_id);
+      const markValue = e.score ?? e.mark ?? null;
+
       playerMap[e.player_id].history.push({
         trainingId: e.training_id,
         date: tr?.date || '',
-        isPresent: e.is_present,
-        score: e.score,
-        absenceReason: e.absence_reason,
+        isPresent: Boolean(e.is_present),
+        score: markValue,
+        absenceReason: e.absence_reason || null,
       });
     });
 
     // Analiza reguł biznesowych
     for (const [playerId, data] of Object.entries(playerMap)) {
-      // Sortowanie od najświeższego treningu
       data.history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       // REGUŁA A: Trzy minusy z rzędu na obecnych treningach
@@ -184,7 +183,7 @@ export async function getTeamAlerts(teamId: string): Promise<{
 
       // REGUŁA B: Ryzyko przeciążenia RPE (zmęczenie >= 4 w ostatnim treningu)
       const lastSurvey = (surveys || []).find(
-        (s) => s.training_id === latestTraining.id && s.player_id === playerId
+        (s: any) => s.training_id === latestTraining.id && s.player_id === playerId
       );
 
       if (lastSurvey && lastSurvey.fatigue_rating >= 4) {
@@ -228,7 +227,7 @@ export async function getTeamAlerts(teamId: string): Promise<{
 }
 
 /**
- * 2. Pobiera pełen profil analityczny konkretnego zawodnika (do widoku profilu / karty piłkarza)
+ * 2. Pobiera pełen profil analityczny konkretnego zawodnika
  */
 export async function getPlayerAnalytics(playerId: string): Promise<{
   success: boolean;
@@ -240,8 +239,10 @@ export async function getPlayerAnalytics(playerId: string): Promise<{
       return { success: false, error: 'Brak identyfikatora zawodnika.' };
     }
 
+    const supabase = await createClient();
+
     // 1. Pobierz dane zawodnika
-    const { data: player, error: pErr } = await supabaseAdmin
+    const { data: player, error: pErr } = await supabase
       .from('players')
       .select('id, first_name, last_name, jersey_number, status')
       .eq('id', playerId)
@@ -252,35 +253,41 @@ export async function getPlayerAnalytics(playerId: string): Promise<{
     }
 
     // 2. Pobierz historię ocen wraz z treningami
-    const { data: evals, error: evErr } = await supabaseAdmin
+    const { data: evals, error: evErr } = await supabase
       .from('evaluations')
       .select(`
-        training_id,
-        is_present,
-        score,
-        absence_reason,
+        *,
         trainings!inner ( id, date, topic, status )
       `)
-      .eq('player_id', playerId)
-      .order('trainings(date)', { ascending: false });
+      .eq('player_id', playerId);
 
     if (evErr) {
       return { success: false, error: evErr.message };
     }
 
-    // 3. Pobierz wypełnione ankiety tego gracza
-    const { data: surveys } = await supabaseAdmin
+    // Bezpieczne sortowanie po dacie treningu w pamięci
+    const sortedEvals = (evals || []).sort((a: any, b: any) => {
+      const trA = Array.isArray(a.trainings) ? a.trainings[0] : a.trainings;
+      const trB = Array.isArray(b.trainings) ? b.trainings[0] : b.trainings;
+      const dateA = trA?.date ? new Date(trA.date).getTime() : 0;
+      const dateB = trB?.date ? new Date(trB.date).getTime() : 0;
+      return dateB - dateA;
+    });
+
+    // 3. Pobierz ankiety tego gracza
+    const { data: surveys } = await supabase
       .from('post_training_surveys')
       .select('training_id, fatigue_rating, satisfaction_rating')
-      .eq('player_id', playerId)
-      .eq('status', 'completed');
+      .eq('player_id', playerId);
 
     const surveyMap = new Map<string, { fatigue: number; satisfaction: number }>();
-    (surveys || []).forEach((s) => {
-      surveyMap.set(s.training_id, {
-        fatigue: s.fatigue_rating,
-        satisfaction: s.satisfaction_rating,
-      });
+    (surveys || []).forEach((s: any) => {
+      if (s.fatigue_rating != null && s.satisfaction_rating != null) {
+        surveyMap.set(s.training_id, {
+          fatigue: s.fatigue_rating,
+          satisfaction: s.satisfaction_rating,
+        });
+      }
     });
 
     let presentCount = 0;
@@ -294,15 +301,17 @@ export async function getPlayerAnalytics(playerId: string): Promise<{
 
     const trendHistory: PlayerTrendPoint[] = [];
 
-    (evals || []).forEach((item: any) => {
-      const tr = item.trainings;
+    sortedEvals.forEach((item: any) => {
+      const tr = Array.isArray(item.trainings) ? item.trainings[0] : item.trainings;
       const s = surveyMap.get(item.training_id);
+      const isPresent = Boolean(item.is_present);
+      const markValue = item.score ?? item.mark ?? null;
 
-      if (item.is_present) {
+      if (isPresent) {
         presentCount++;
-        if (item.score === '+') plusCount++;
-        if (item.score === '0') zeroCount++;
-        if (item.score === '-') minusCount++;
+        if (markValue === '+') plusCount++;
+        if (markValue === '0') zeroCount++;
+        if (markValue === '-') minusCount++;
       } else {
         absentCount++;
       }
@@ -314,12 +323,12 @@ export async function getPlayerAnalytics(playerId: string): Promise<{
       }
 
       trendHistory.push({
-        trainingId: tr.id,
-        date: tr.date,
-        topic: tr.topic,
-        isPresent: item.is_present,
-        score: item.score,
-        absenceReason: item.absence_reason,
+        trainingId: tr?.id || item.training_id,
+        date: tr?.date || '',
+        topic: tr?.topic || null,
+        isPresent,
+        score: markValue,
+        absenceReason: item.absence_reason || null,
         fatigueRating: s ? s.fatigue : null,
         satisfactionRating: s ? s.satisfaction : null,
       });
@@ -374,7 +383,9 @@ export async function getTeamMicrocycleReport(
       return { success: false, error: 'Nie podano identyfikatora drużyny.' };
     }
 
-    const { data: trainings, error: trErr } = await supabaseAdmin
+    const supabase = await createClient();
+
+    const { data: trainings, error: trErr } = await supabase
       .from('trainings')
       .select('id, date')
       .eq('team_id', teamId)
@@ -407,9 +418,9 @@ export async function getTeamMicrocycleReport(
 
     const trainingIds = trainings.map((t) => t.id);
 
-    const { data: evals, error: evErr } = await supabaseAdmin
+    const { data: evals, error: evErr } = await supabase
       .from('evaluations')
-      .select('is_present, score, absence_reason')
+      .select('*')
       .in('training_id', trainingIds);
 
     if (evErr) return { success: false, error: evErr.message };
@@ -421,12 +432,15 @@ export async function getTeamMicrocycleReport(
     let minus = 0;
     const absences = { injury: 0, sick: 0, excused: 0, unexcused: 0 };
 
-    (evals || []).forEach((e) => {
-      if (e.is_present) {
+    (evals || []).forEach((e: any) => {
+      const isPresent = Boolean(e.is_present);
+      const markValue = e.score ?? e.mark ?? null;
+
+      if (isPresent) {
         present++;
-        if (e.score === '+') plus++;
-        if (e.score === '0') zero++;
-        if (e.score === '-') minus++;
+        if (markValue === '+') plus++;
+        if (markValue === '0') zero++;
+        if (markValue === '-') minus++;
       } else {
         absent++;
         if (e.absence_reason && e.absence_reason in absences) {

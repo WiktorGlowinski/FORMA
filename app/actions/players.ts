@@ -1,6 +1,6 @@
 'use server';
 
-import { supabaseAdmin } from '@/lib/supabase-admin';
+import { createClient } from '@/lib/supabase-server';
 
 export interface CsvPlayerRecord {
   firstName: string;
@@ -10,9 +10,6 @@ export interface CsvPlayerRecord {
   primaryPosition?: string;
 }
 
-/**
- * 1. Masowy import zawodników z pliku CSV bezpośrednio do danej drużyny
- */
 export async function importPlayersBatch(
   clubId: string,
   teamId: string,
@@ -23,7 +20,8 @@ export async function importPlayersBatch(
       return { success: false, error: 'Przekazano pustą listę zawodników.' };
     }
 
-    // Mapowanie na kolumny bazy danych
+    const supabase = await createClient();
+
     const rowsToInsert = records.map((p) => {
       if (!p.firstName?.trim() || !p.lastName?.trim()) {
         throw new Error('Każdy zawodnik musi posiadać imię i nazwisko.');
@@ -41,7 +39,7 @@ export async function importPlayersBatch(
       };
     });
 
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabase
       .from('players')
       .insert(rowsToInsert)
       .select('id, first_name, last_name, jersey_number');
@@ -60,12 +58,11 @@ export async function importPlayersBatch(
   }
 }
 
-/**
- * 2. Pobranie listy zawodników danej drużyny wraz z ich aktualnym statusem
- */
 export async function getTeamPlayersList(teamId: string) {
   try {
-    const { data, error } = await supabaseAdmin
+    const supabase = await createClient();
+
+    const { data, error } = await supabase
       .from('players')
       .select('id, first_name, last_name, jersey_number, birth_year, status')
       .eq('current_team_id', teamId)
