@@ -1,75 +1,104 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, RotateCcw } from "lucide-react";
+import {
+  ChevronLeft,
+  RotateCcw,
+  ArrowLeft,
+  ArrowUp,
+  ArrowRight,
+  ArrowDown,
+  X,
+  Minus,
+  UserX,
+} from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   ABSENCE_REASONS,
   INJURY_KINDS,
-  SCORE_OPTIONS,
-  getTraining,
   markLabel,
   playerName,
   ratedCount,
   type AbsenceReason,
-  type EvaluationScore,
-  type InjuryKind,
   type Mark,
   type SquadPlayer,
 } from "@/components/coach/data";
 import { InjuryIcon } from "@/components/coach/injury-icon";
-import { useSquad, useTrainingMarks } from "@/components/coach/use-coach-session";
+import {
+  getTrainingEvaluationDataAction,
+  savePlayerMarkAction,
+  resetTrainingEvaluationsAction,
+} from "@/app/actions/coach";
 import { cn } from "@/lib/utils";
 
-const SCORE_TONE: Record<EvaluationScore, string> = {
-  "-": "border-minus/50 text-minus hover:bg-minus/15 data-[on=true]:bg-minus data-[on=true]:text-background",
-  "0": "border-zero/50 text-zero hover:bg-zero/15 data-[on=true]:bg-zero data-[on=true]:text-background",
-  "+": "border-plus/50 text-plus hover:bg-plus/15 data-[on=true]:bg-plus data-[on=true]:text-background",
-};
-
 export function QuickEvaluation({ trainingId }: { trainingId: string }) {
-  const training = getTraining(trainingId);
-  const { players, ready: squadReady } = useSquad();
-  const { marks, ready: marksReady, setMark, clearTraining } = useTrainingMarks(trainingId);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [training, setTraining] = useState<{
+    id: string;
+    teamName: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    place: string;
+    topic?: string;
+    status: string;
+  } | null>(null);
+  const [players, setPlayers] = useState<SquadPlayer[]>([]);
+  const [marks, setMarks] = useState<Record<string, Mark>>({});
   const [index, setIndex] = useState(0);
-  const [absenceOpen, setAbsenceOpen] = useState(false);
-  const [injuryOpen, setInjuryOpen] = useState(false);
-  const ready = squadReady && marksReady;
 
-  if (!training) {
+  const [absenceModalOpen, setAbsenceModalOpen] = useState(false);
+  const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<AbsenceReason | null>(null);
+
+  useEffect(() => {
+    async function init() {
+      if (!trainingId) {
+        setErrorMsg("Brak identyfikatora jednostki treningowej.");
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setErrorMsg(null);
+
+      const res = await getTrainingEvaluationDataAction(trainingId);
+
+      if (!res.success) {
+        setErrorMsg(res.error || "Nie udało się pobrać jednostki.");
+      } else if (res.training && res.squad) {
+        setTraining(res.training);
+        setPlayers(res.squad);
+        setMarks(res.initialMarks || {});
+
+        const firstUnrated = res.squad.findIndex((p: SquadPlayer) => !res.initialMarks?.[p.id]);
+        if (firstUnrated !== -1) {
+          setIndex(firstUnrated);
+        } else if (res.squad.length > 0) {
+          setIndex(res.squad.length);
+        }
+      }
+      setLoading(false);
+    }
+    init();
+  }, [trainingId]);
+
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">Pobieranie protokołu jednostki z bazy danych…</p>;
+  }
+
+  if (errorMsg || !training) {
     return (
-      <div>
-        <h1 className="font-heading text-5xl uppercase">Nie ma takiej jednostki</h1>
-        <p className="mt-3 text-muted-foreground">Sprawdź listę treningów trenera.</p>
+      <div className="print-card rounded-md border-2 border-destructive/40 bg-card p-6">
+        <h1 className="font-heading text-4xl text-destructive uppercase">Nie udało się otworzyć jednostki</h1>
+        <p className="mt-3 font-mono text-sm text-destructive">{errorMsg || "Brak danych treningu."}</p>
         <Link href="/trener" className={cn(buttonVariants({ size: "lg" }), "mt-6 inline-flex h-11 px-4")}>
           Wróć do jednostek
         </Link>
       </div>
     );
-  }
-
-  if (training.status !== "completed") {
-    return (
-      <div>
-        <p className="text-sm font-medium tracking-[0.16em] text-primary uppercase">{training.teamName}</p>
-        <h1 className="mt-2 font-heading text-5xl uppercase">
-          {training.status === "cancelled" ? "Trening odwołany" : "Trening jeszcze trwa"}
-        </h1>
-        <p className="mt-3 max-w-xl text-muted-foreground">
-          {training.status === "cancelled"
-            ? "Odwołana jednostka nie dostaje ocen minus, zero ani plus."
-            : "Szybką ocenę otworzysz, gdy jednostka będzie zrealizowana."}
-        </p>
-        <Link href="/trener" className={cn(buttonVariants({ size: "lg" }), "mt-6 inline-flex h-11 px-4")}>
-          Wróć do jednostek
-        </Link>
-      </div>
-    );
-  }
-
-  if (!ready) {
-    return <p className="text-sm text-muted-foreground">Odczytuję zapis tej jednostki…</p>;
   }
 
   const total = players.length;
@@ -77,281 +106,530 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   const player = players[index];
   const finished = index >= total;
 
-  function commit(mark: Mark) {
+  async function commit(mark: Mark) {
     if (!player) return;
-    setMark(player.id, mark);
-    setAbsenceOpen(false);
-    setInjuryOpen(false);
+    setMarks((curr) => ({ ...curr, [player.id]: mark }));
+    setAbsenceModalOpen(false);
+    setSelectedAbsenceReason(null);
     setIndex((current) => Math.min(current + 1, total));
+
+    await savePlayerMarkAction(trainingId, player.id, mark);
+  }
+
+  async function handleReset() {
+    if (!window.confirm("Czy na pewno chcesz usunąć wszystkie wystawione oceny dla tego treningu z bazy danych?")) {
+      return;
+    }
+    setResetting(true);
+    const res = await resetTrainingEvaluationsAction(trainingId);
+    if (res.success) {
+      setMarks({});
+      setIndex(0);
+      setAbsenceModalOpen(false);
+      setSelectedAbsenceReason(null);
+    } else {
+      alert(res.error || "Wystąpił błąd podczas usuwania ocen.");
+    }
+    setResetting(false);
   }
 
   function goTo(next: number) {
-    setAbsenceOpen(false);
-    setInjuryOpen(false);
+    setAbsenceModalOpen(false);
+    setSelectedAbsenceReason(null);
     setIndex(next);
   }
 
-  function restart() {
-    clearTraining();
-    setIndex(0);
-    setAbsenceOpen(false);
-    setInjuryOpen(false);
-  }
-
   return (
-    <div>
-      <Link href="/trener" className="pitch-link text-sm text-muted-foreground">
-        Wróć do jednostek
-      </Link>
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-sm font-medium tracking-[0.16em] text-primary uppercase">
-            {training.teamName} · {training.startTime}–{training.endTime}
-          </p>
-          <h1 className="mt-2 font-heading text-4xl tracking-tight sm:text-5xl">Jeden zawodnik. Trzy przyciski.</h1>
-        </div>
-        <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-          {training.place}. {training.topic}. Zapis zostaje w tej przeglądarce, nawet po odświeżeniu.
-        </p>
+    <div className="mx-auto max-w-xl pb-8">
+      {/* NAGŁÓWEK POWROTU */}
+      <div className="flex items-center justify-between">
+        <Link href="/trener" className="pitch-link text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          ← Wróć do jednostek
+        </Link>
+        <span className="font-mono text-xs font-semibold text-primary">
+          {training.teamName} · {training.startTime}–{training.endTime}
+        </span>
       </div>
 
-      <div className="print-card mt-6 overflow-hidden rounded-md border-2 border-foreground/20 bg-card">
-        <div className="mow-stripes flex items-center justify-between gap-3 px-4 py-3 text-chalk sm:px-6">
-          <p className="text-sm">{training.teamName}</p>
-          <p className="text-sm font-medium tabular-nums">
-            Oceniono {done} / {total}
+      <div className="print-card mt-3 overflow-hidden rounded-xl border-2 border-foreground/20 bg-card shadow-sm">
+        {/* PASEK POSTĘPU */}
+        <div className="mow-stripes flex items-center justify-between gap-3 px-4 py-2.5 text-chalk">
+          <p className="text-xs font-medium uppercase tracking-wider">Ocena składu</p>
+          <p className="font-mono text-xs font-bold tabular-nums">
+            {done} z {total} ocenionych
           </p>
         </div>
-        <div
-          className="h-1 bg-muted"
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={total}
-          aria-valuenow={done}
-          aria-label="Postęp oceny składu"
-        >
-          <div className="h-full bg-primary transition-[width] duration-300" style={{ width: `${(done / total) * 100}%` }} />
+        <div className="h-1.5 bg-muted" role="progressbar">
+          <div
+            className="h-full bg-primary transition-[width] duration-300"
+            style={{ width: `${total > 0 ? (done / total) * 100 : 0}%` }}
+          />
         </div>
 
         {finished || !player ? (
           <Summary
             players={players}
             marks={marks}
+            resetting={resetting}
             onEdit={goTo}
-            onReset={restart}
+            onReset={handleReset}
           />
         ) : (
-          <PlayerStep
-            player={player}
-            index={index}
-            total={total}
-            mark={marks[player.id]}
-            absenceOpen={absenceOpen}
-            injuryOpen={injuryOpen}
-            onToggleAbsence={() => {
-              setInjuryOpen(false);
-              setAbsenceOpen((open) => !open);
-            }}
-            onRate={(score) => commit({ type: "score", score })}
-            onReason={(reason) => {
-              if (reason === "injury") {
-                setInjuryOpen(true);
-                return;
-              }
-              commit({ type: "absence", reason });
-            }}
-            onInjury={(injury) => commit({ type: "absence", reason: "injury", injury })}
-            onBack={() => goTo(Math.max(0, index - 1))}
-            allMarked={done === total}
-            onSummary={() => goTo(total)}
-          />
+          <div className="p-3 sm:p-5">
+            {/* SUBTELNY PASEK GESTÓW */}
+            <div className="mb-3 flex items-center justify-between rounded-lg border border-foreground/10 bg-muted/40 px-3 py-1.5 font-mono text-[11px] font-semibold tracking-tight text-muted-foreground">
+              <span className="flex items-center gap-1 text-minus">
+                <ArrowLeft className="size-3" /> Słabiej
+              </span>
+              <span className="flex items-center gap-1 text-zero">
+                <ArrowUp className="size-3" /> Typowo
+              </span>
+              <span className="flex items-center gap-1 text-plus">
+                Powyżej <ArrowRight className="size-3" />
+              </span>
+              <span className="flex items-center gap-1 text-foreground">
+                Uraz <ArrowDown className="size-3" />
+              </span>
+            </div>
+
+            {/* INTERAKTYWNA KARTA ZE STREFAMI WEKTOROWYMI */}
+            <TinderCard
+              key={player.id}
+              player={player}
+              index={index}
+              total={total}
+              currentMark={marks[player.id]}
+              onSwipeLeft={() => commit({ type: "score", score: "-" })}
+              onSwipeRight={() => commit({ type: "score", score: "+" })}
+              onSwipeUp={() => commit({ type: "score", score: "0" })}
+              onSwipeDown={() => {
+                setSelectedAbsenceReason(null);
+                setAbsenceModalOpen(true);
+              }}
+            />
+
+            {/* KOMPAKTOWY DOCK PRZYCISKÓW */}
+            <div className="mt-4 flex flex-col items-center gap-2.5">
+              <div className="flex w-full items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => commit({ type: "score", score: "-" })}
+                  aria-label="Ocena: Słabiej (-)"
+                  className="flex h-14 flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-minus/50 bg-minus/10 font-heading text-xl font-bold text-minus shadow-[2px_2px_0_0_var(--foreground)] transition-transform active:scale-95"
+                >
+                  <Minus className="size-5 stroke-[3]" />
+                  <span>Słabiej</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => commit({ type: "score", score: "0" })}
+                  aria-label="Ocena: Typowo (0)"
+                  className="flex h-14 flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-zero/60 bg-zero/15 font-heading text-xl font-bold text-foreground shadow-[2px_2px_0_0_var(--foreground)] transition-transform active:scale-95"
+                >
+                  <span className="text-2xl leading-none">0</span>
+                  <span>Typowo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => commit({ type: "score", score: "+" })}
+                  aria-label="Ocena: Powyżej (+)"
+                  className="flex h-14 flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-plus/50 bg-plus/10 font-heading text-xl font-bold text-plus shadow-[2px_2px_0_0_var(--foreground)] transition-transform active:scale-95"
+                >
+                  <span className="text-2xl leading-none">+</span>
+                  <span>Powyżej</span>
+                </button>
+              </div>
+
+              <div className="flex w-full items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-10 px-3 text-xs"
+                  disabled={index === 0}
+                  onClick={() => goTo(Math.max(0, index - 1))}
+                >
+                  <ChevronLeft className="size-4" />
+                  Cofnij
+                </Button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAbsenceReason(null);
+                    setAbsenceModalOpen(true);
+                  }}
+                  className={cn(
+                    "flex h-10 flex-1 items-center justify-center gap-2 rounded-lg border-2 text-xs font-semibold transition active:scale-95",
+                    marks[player.id]?.type === "absence"
+                      ? "border-foreground bg-secondary font-bold"
+                      : "border-foreground/20 bg-background hover:bg-muted"
+                  )}
+                >
+                  <UserX className="size-4" />
+                  <span>Nieobecność / Kontuzja (↓)</span>
+                </button>
+
+                {done === total && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-10 px-3 text-xs font-bold"
+                    onClick={() => goTo(total)}
+                  >
+                    Koniec
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
+
+      {/* PEŁNOEKRANOWY MODAL WYBORU NIEOBECNOŚCI */}
+      {absenceModalOpen && player && (
+        <div className="fixed inset-0 z-50 flex flex-col justify-between bg-background/98 p-4 backdrop-blur-md sm:p-8 animate-in fade-in duration-200">
+          <div className="mx-auto w-full max-w-lg">
+            <div className="flex items-start justify-between border-b pb-4">
+              <div>
+                <span className="text-xs font-bold tracking-widest text-primary uppercase">Status obecności</span>
+                <h2 className="font-heading text-3xl tracking-tight">
+                  {playerName(player)} (#{player.jerseyNumber})
+                </h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Nieobecność nie zaniża średniej ocen (nie jest minusem).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAbsenceModalOpen(false)}
+                className="rounded-full border-2 border-foreground/20 p-2 hover:bg-muted"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+
+            {!selectedAbsenceReason ? (
+              <div className="mt-6 space-y-3">
+                <p className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+                  Wybierz powód nieobecności:
+                </p>
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {ABSENCE_REASONS.map((reason) => (
+                    <button
+                      key={reason.id}
+                      type="button"
+                      onClick={() => {
+                        if (reason.id === "injury") {
+                          setSelectedAbsenceReason("injury");
+                        } else {
+                          commit({ type: "absence", reason: reason.id });
+                        }
+                      }}
+                      className={cn(
+                        "flex flex-col items-start justify-center rounded-xl border-2 p-4 text-left transition duration-150 active:scale-[0.98]",
+                        reason.id === "injury"
+                          ? "border-destructive/60 bg-destructive/5 hover:border-destructive hover:bg-destructive/10"
+                          : "border-foreground/20 bg-card hover:border-foreground hover:bg-secondary"
+                      )}
+                    >
+                      <span className="font-heading text-xl tracking-wide">{reason.label}</span>
+                      <span className="mt-0.5 text-xs text-muted-foreground">
+                        {reason.id === "injury" ? "Rejestracja urazu medycznego" : "Standardowe usprawiedliwienie"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-6 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold tracking-wider text-destructive uppercase">
+                    Rodzaj kontuzji:
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAbsenceReason(null)}
+                    className="text-xs font-medium text-muted-foreground underline hover:text-foreground"
+                  >
+                    ← Inny powód
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                  {INJURY_KINDS.map((kind) => (
+                    <button
+                      key={kind.id}
+                      type="button"
+                      onClick={() => commit({ type: "absence", reason: "injury", injury: kind.id })}
+                      className="flex flex-col items-center justify-center rounded-xl border-2 border-foreground/20 bg-card p-3 text-center transition duration-150 hover:border-destructive hover:bg-destructive/10 active:scale-[0.98]"
+                    >
+                      <InjuryIcon kind={kind.id} className="size-8 text-destructive" />
+                      <span className="mt-2 font-heading text-base leading-tight">{kind.label}</span>
+                      <span className="mt-0.5 text-[11px] text-muted-foreground">{kind.hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="mx-auto w-full max-w-lg border-t pt-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="w-full h-11 text-sm font-semibold"
+              onClick={() => setAbsenceModalOpen(false)}
+            >
+              Anuluj i wróć
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function PlayerStep({
+/**
+ * KARTA Z WEKTOROWĄ DETEKCJĄ KĄTOWĄ I PRIORYTETEM PIONU
+ */
+function TinderCard({
   player,
   index,
   total,
-  mark,
-  absenceOpen,
-  injuryOpen,
-  onToggleAbsence,
-  onRate,
-  onReason,
-  onInjury,
-  onBack,
-  allMarked,
-  onSummary,
+  currentMark,
+  onSwipeLeft,
+  onSwipeRight,
+  onSwipeUp,
+  onSwipeDown,
 }: {
   player: SquadPlayer;
   index: number;
   total: number;
-  mark?: Mark;
-  absenceOpen: boolean;
-  injuryOpen: boolean;
-  onToggleAbsence: () => void;
-  onRate: (score: EvaluationScore) => void;
-  onReason: (reason: AbsenceReason) => void;
-  onInjury: (injury: InjuryKind) => void;
-  onBack: () => void;
-  allMarked: boolean;
-  onSummary: () => void;
+  currentMark?: Mark;
+  onSwipeLeft: () => void;
+  onSwipeRight: () => void;
+  onSwipeUp: () => void;
+  onSwipeDown: () => void;
 }) {
-  const injuryMark = mark?.type === "absence" && mark.reason === "injury" ? mark.injury : undefined;
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [flyDirection, setFlyDirection] = useState<"left" | "right" | "up" | "down" | null>(null);
+
+  const startPos = useRef({ x: 0, y: 0 });
+
+  function handlePointerDown(e: React.PointerEvent) {
+    if (flyDirection) return;
+    setIsDragging(true);
+    startPos.current = { x: e.clientX, y: e.clientY };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    if (!isDragging || flyDirection) return;
+    const dx = e.clientX - startPos.current.x;
+    const dy = e.clientY - startPos.current.y;
+    setDrag({ x: dx, y: dy });
+  }
+
+  // Wyliczenie wektora przesunięcia i kąta w stopniach (-180 do +180)
+  const distance = Math.hypot(drag.x, drag.y);
+  const angle = (Math.atan2(drag.y, drag.x) * 180) / Math.PI;
+
+  // Strefy kątowe z szerokim zakresem dla pionu (110 stopni zamiast 90):
+  // GÓRA: -145° do -35°
+  // DÓŁ:   35° do 145°
+  // PRAWO: -35° do 35°
+  // LEWO:  reszta (poza -145°..145°)
+  let activeDirection: "left" | "right" | "up" | "down" | null = null;
+  if (distance > 22) {
+    if (angle >= -145 && angle <= -35) {
+      activeDirection = "up";
+    } else if (angle >= 35 && angle <= 145) {
+      activeDirection = "down";
+    } else if (angle > -35 && angle < 35) {
+      activeDirection = "right";
+    } else {
+      activeDirection = "left";
+    }
+  }
+
+  function handlePointerUp(e: React.PointerEvent) {
+    if (!isDragging || flyDirection) return;
+    setIsDragging(false);
+
+    const threshold = 70; // Wymagany dystans przesunięcia
+
+    if (distance >= threshold && activeDirection) {
+      if (activeDirection === "right") {
+        setFlyDirection("right");
+        setTimeout(onSwipeRight, 200);
+        return;
+      }
+      if (activeDirection === "left") {
+        setFlyDirection("left");
+        setTimeout(onSwipeLeft, 200);
+        return;
+      }
+      if (activeDirection === "up") {
+        setFlyDirection("up");
+        setTimeout(onSwipeUp, 200);
+        return;
+      }
+      if (activeDirection === "down") {
+        setDrag({ x: 0, y: 0 });
+        onSwipeDown();
+        return;
+      }
+    }
+
+    setDrag({ x: 0, y: 0 });
+  }
+
+  // Płynna przezroczystość stempla powiązana wyłącznie z dominującym kierunkiem
+  const stampStrength = Math.min(Math.max((distance - 20) / 55, 0), 1);
+  const opacityLeft = activeDirection === "left" ? stampStrength : 0;
+  const opacityRight = activeDirection === "right" ? stampStrength : 0;
+  const opacityUp = activeDirection === "up" ? stampStrength : 0;
+  const opacityDown = activeDirection === "down" ? stampStrength : 0;
+
+  let transformStyle = "";
+  let opacityStyle = 1;
+
+  if (flyDirection === "left") {
+    transformStyle = "translate3d(-130%, 0, 0) rotate(-20deg)";
+    opacityStyle = 0;
+  } else if (flyDirection === "right") {
+    transformStyle = "translate3d(130%, 0, 0) rotate(20deg)";
+    opacityStyle = 0;
+  } else if (flyDirection === "up") {
+    transformStyle = "translate3d(0, -90px, 0) scale(0.85)";
+    opacityStyle = 0;
+  } else {
+    // Tłumimy rotację, jeśli ruch idzie głównie w pionie, by karta nie chwiała się na boki
+    const isVerticalMove = activeDirection === "up" || activeDirection === "down";
+    const rotate = isVerticalMove ? drag.x * 0.02 : drag.x * 0.08;
+    transformStyle = `translate3d(${drag.x}px, ${drag.y}px, 0) rotate(${rotate}deg)`;
+  }
+
+  let borderGlow = "border-foreground/20";
+  if (opacityLeft > 0.2) borderGlow = "border-minus shadow-[0_0_25px_rgba(239,68,68,0.4)]";
+  else if (opacityRight > 0.2) borderGlow = "border-plus shadow-[0_0_25px_rgba(34,197,94,0.4)]";
+  else if (opacityUp > 0.2) borderGlow = "border-zero shadow-[0_0_25px_rgba(234,179,8,0.45)]";
+  else if (opacityDown > 0.2) borderGlow = "border-foreground shadow-[0_0_20px_rgba(0,0,0,0.3)]";
 
   return (
-    <div key={player.id} className="step-in px-4 py-6 sm:px-8 sm:py-8">
-      <p className="text-xs tracking-[0.14em] text-muted-foreground uppercase">
-        Zawodnik {index + 1} z {total}
-      </p>
-      <div className="mt-4 flex items-center gap-4" aria-live="polite">
-        <div className="relative grid size-16 shrink-0 place-items-center rounded-full bg-muted font-heading text-2xl">
-          {player.firstName[0]}
-          {player.lastName[0]}
-          <span className="absolute -right-1 -bottom-1 grid size-7 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-            {player.jerseyNumber}
-          </span>
-        </div>
-        <div>
-          <h2 className="font-heading text-4xl leading-none tracking-tight sm:text-5xl">{playerName(player)}</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {player.role} · względem własnego poziomu, nie względem kolegów
-          </p>
-        </div>
-      </div>
+    <div className="relative mx-auto flex h-[360px] w-full max-w-sm items-center justify-center select-none touch-none sm:h-[400px]">
+      <div className="absolute inset-x-2 inset-y-2 rounded-2xl border-2 border-foreground/10 bg-muted/70 opacity-50" />
 
-      {mark ? (
-        <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-          {injuryMark ? <InjuryIcon kind={injuryMark} className="size-5 text-foreground" /> : null}
-          <span>
-            Zapis roboczy: <span className="text-foreground">{markLabel(mark)}</span>
-          </span>
-        </p>
-      ) : null}
-
-      <div className="mt-6 grid grid-cols-3 gap-2 sm:gap-3" role="group" aria-label="Ocena funkcjonowania">
-        {SCORE_OPTIONS.map((option) => {
-          const selected = mark?.type === "score" && mark.score === option.score;
-          return (
-            <button
-              key={option.score}
-              type="button"
-              data-on={selected}
-              aria-pressed={selected}
-              onClick={() => onRate(option.score)}
-              className={cn(
-                "group/score flex h-24 flex-col items-center justify-center rounded-md border-2 bg-background/50 transition duration-150 hover:-translate-y-1 hover:shadow-[3px_3px_0_0_var(--foreground)] sm:h-28",
-                SCORE_TONE[option.score],
-              )}
-            >
-              <span className="font-heading text-4xl leading-none transition-transform duration-150 group-hover/score:scale-110">
-                {option.score}
-              </span>
-              <span className="mt-1 text-xs sm:text-sm">{option.title}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="mt-5">
-        <button
-          type="button"
-          aria-expanded={absenceOpen}
-          onClick={onToggleAbsence}
-          className={cn(
-            "w-full rounded-md border-2 px-4 py-3 text-left text-sm transition duration-150 hover:-translate-y-0.5 hover:border-foreground/40 hover:bg-secondary",
-            mark?.type === "absence" || absenceOpen ? "border-foreground/40 bg-secondary" : "border-foreground/15",
-          )}
-        >
-          <span className="font-medium">Nieobecny</span>
-          <span className="mt-0.5 block text-muted-foreground">Bez oceny minus, zero albo plus. Wybierz powód.</span>
-        </button>
-        {absenceOpen ? (
-          <div className="mt-2 grid grid-cols-2 gap-2" role="group" aria-label="Powód nieobecności">
-            {ABSENCE_REASONS.map((reason) => {
-              const selected =
-                reason.id === "injury"
-                  ? injuryOpen || injuryMark !== undefined
-                  : mark?.type === "absence" && mark.reason === reason.id;
-              return (
-                <button
-                  key={reason.id}
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => onReason(reason.id)}
-                  className={cn(
-                    "rounded-md border-2 px-3 py-3 text-sm transition duration-150 hover:-translate-y-0.5",
-                    selected
-                      ? "border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)]"
-                      : "border-foreground/15 hover:border-foreground/40 hover:bg-accent",
-                  )}
-                >
-                  {reason.label}
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
-        {absenceOpen && injuryOpen ? (
-          <div className="mt-3" role="group" aria-label="Rodzaj kontuzji">
-            <p className="text-sm text-muted-foreground">Kontuzja nie jest minusem. Wybierz, co się stało.</p>
-            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {INJURY_KINDS.map((kind) => {
-                const selected = injuryMark === kind.id;
-                return (
-                  <button
-                    key={kind.id}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => onInjury(kind.id)}
-                    className={cn(
-                      "flex flex-col items-center rounded-md border-2 px-2 py-3 text-center transition duration-150 hover:-translate-y-0.5",
-                      selected
-                        ? "border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)]"
-                        : "border-foreground/15 hover:border-foreground/40 hover:bg-accent",
-                    )}
-                  >
-                    <InjuryIcon kind={kind.id} className="size-8" />
-                    <span className="mt-2 text-sm font-medium">{kind.label}</span>
-                    <span className={cn("mt-0.5 text-xs", selected ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                      {kind.hint}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <Button type="button" variant="outline" size="lg" className="h-11 px-4" disabled={index === 0} onClick={onBack}>
-          <ChevronLeft />
-          Poprzedni
-        </Button>
-        {allMarked ? (
-          <Button type="button" variant="secondary" size="lg" className="h-11 px-4" onClick={onSummary}>
-            Do podsumowania
-          </Button>
-        ) : (
-          <p className="text-xs text-muted-foreground">Wybór zapisuje się od razu. Przy kontuzji najpierw rodzaj.</p>
+      <div
+        ref={cardRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{
+          transform: transformStyle,
+          opacity: opacityStyle,
+          transition: isDragging ? "none" : "transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.2s ease-out",
+        }}
+        className={cn(
+          "relative flex h-full w-full cursor-grab flex-col justify-between overflow-hidden rounded-2xl border-4 bg-card p-5 shadow-[6px_6px_0_0_var(--foreground)] active:cursor-grabbing sm:p-6",
+          borderGlow
         )}
+      >
+        {/* STEMPLE GRAFICZNE */}
+        <div
+          style={{ opacity: opacityLeft }}
+          className="pointer-events-none absolute top-6 right-6 rotate-12 rounded-lg border-4 border-minus bg-background/95 px-4 py-1.5 text-xl font-black tracking-widest text-minus uppercase shadow-md"
+        >
+          Słabiej (−)
+        </div>
+
+        <div
+          style={{ opacity: opacityRight }}
+          className="pointer-events-none absolute top-6 left-6 -rotate-12 rounded-lg border-4 border-plus bg-background/95 px-4 py-1.5 text-xl font-black tracking-widest text-plus uppercase shadow-md"
+        >
+          Powyżej (+)
+        </div>
+
+        <div
+          style={{ opacity: opacityUp }}
+          className="pointer-events-none absolute inset-x-8 top-1/2 -translate-y-1/2 text-center rounded-xl border-4 border-zero bg-background/95 p-3 text-xl font-black tracking-widest text-zero uppercase shadow-xl z-20"
+        >
+          Typowy poziom (0)
+        </div>
+
+        <div
+          style={{ opacity: opacityDown }}
+          className="pointer-events-none absolute top-6 inset-x-8 text-center rounded-lg border-4 border-foreground bg-background/95 py-2 text-sm font-black tracking-widest text-foreground uppercase shadow-md"
+        >
+          Nieobecność (↓)
+        </div>
+
+        {/* GÓRNY PASEK KARTY */}
+        <div className="flex items-center justify-between border-b border-border/80 pb-3">
+          <span className="rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[11px] font-bold text-primary uppercase">
+            Zawodnik {index + 1} / {total}
+          </span>
+          <span className="font-mono text-[11px] font-medium text-muted-foreground">
+            Przesuń w dowolną stronę
+          </span>
+        </div>
+
+        {/* PROFIL ZAWODNIKA */}
+        <div className="my-auto flex flex-col items-center text-center">
+          <div className="relative grid size-24 place-items-center rounded-full border-4 border-foreground bg-muted font-heading text-4xl shadow-[3px_3px_0_0_var(--foreground)] sm:size-28">
+            {player.firstName[0]}
+            {player.lastName[0]}
+            <span className="absolute -right-1 -bottom-1 grid size-8 place-items-center rounded-full bg-primary font-mono text-xs font-bold text-primary-foreground shadow-sm">
+              #{player.jerseyNumber}
+            </span>
+          </div>
+
+          <div className="mt-3">
+            <h2 className="font-heading text-3xl leading-tight tracking-tight sm:text-4xl">
+              {playerName(player)}
+            </h2>
+            <p className="mt-1 text-xs font-medium text-muted-foreground">
+              {player.role} · ocena względem własnej normy
+            </p>
+          </div>
+        </div>
+
+        {/* DOLNY STATUS W BAZIE */}
+        <div className="border-t border-border/80 pt-2.5 text-center text-[11px] text-muted-foreground">
+          {currentMark ? (
+            <p className="text-foreground">
+              Zapis w bazie: <span className="font-bold underline">{markLabel(currentMark)}</span>
+            </p>
+          ) : (
+            <p>Brak zapisu — przeciągnij lub kliknij przycisk</p>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
+/**
+ * PODSUMOWANIE JEDNOSTKI
+ */
 function Summary({
   players,
   marks,
+  resetting,
   onEdit,
   onReset,
 }: {
   players: SquadPlayer[];
   marks: Record<string, Mark>;
+  resetting: boolean;
   onEdit: (index: number) => void;
   onReset: () => void;
 }) {
@@ -365,61 +643,77 @@ function Summary({
       else acc.plus += 1;
       return acc;
     },
-    { minus: 0, zero: 0, plus: 0, absent: 0, missing: 0 },
+    { minus: 0, zero: 0, plus: 0, absent: 0, missing: 0 }
   );
 
   return (
-    <div className="step-in px-4 py-6 sm:px-8 sm:py-8">
-      <p className="text-sm font-medium tracking-[0.16em] text-primary uppercase">Skład zamknięty</p>
-      <h2 className="mt-2 font-heading text-4xl tracking-tight sm:text-5xl">Wszyscy mają status.</h2>
-      <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
-        Nieobecność, także kontuzja, nie weszła do rozkładu minus / zero / plus. W klubie ten zapis siądzie przy
-        treningu, gdy podepniemy bazę.
+    <div className="step-in p-4 sm:p-8">
+      <p className="text-xs font-bold tracking-widest text-primary uppercase">Skład zamknięty</p>
+      <h2 className="mt-1 font-heading text-3xl tracking-tight sm:text-4xl">Wszyscy ocenieni.</h2>
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        Nieobecności i kontuzje zostały odseparowane od sportowej krzywej ocen. Wszystko zapisano w PostgreSQL.
       </p>
-      <dl className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label="Słabiej" value={counts.minus} tone="text-minus" />
-        <Stat label="Typowo" value={counts.zero} tone="text-zero" />
-        <Stat label="Powyżej" value={counts.plus} tone="text-plus" />
-        <Stat label="Nieobecni" value={counts.absent} tone="text-foreground" />
+
+      <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="rounded-lg border-2 border-minus/40 bg-minus/10 p-3">
+          <dt className="text-[11px] font-semibold text-minus uppercase">Słabiej (−)</dt>
+          <dd className="mt-0.5 font-heading text-3xl leading-none text-minus">{counts.minus}</dd>
+        </div>
+        <div className="rounded-lg border-2 border-zero/40 bg-zero/10 p-3">
+          <dt className="text-[11px] font-semibold text-zero uppercase">Typowo (0)</dt>
+          <dd className="mt-0.5 font-heading text-3xl leading-none text-zero">{counts.zero}</dd>
+        </div>
+        <div className="rounded-lg border-2 border-plus/40 bg-plus/10 p-3">
+          <dt className="text-[11px] font-semibold text-plus uppercase">Powyżej (+)</dt>
+          <dd className="mt-0.5 font-heading text-3xl leading-none text-plus">{counts.plus}</dd>
+        </div>
+        <div className="rounded-lg border-2 border-foreground/20 bg-muted/60 p-3">
+          <dt className="text-[11px] font-semibold text-muted-foreground uppercase">Nieobecni</dt>
+          <dd className="mt-0.5 font-heading text-3xl leading-none text-foreground">{counts.absent}</dd>
+        </div>
       </dl>
-      <ul className="mt-6 divide-y divide-border rounded-md border-2 border-foreground/15">
+
+      <ul className="mt-4 divide-y divide-border rounded-lg border-2 border-foreground/20 bg-card">
         {players.map((player, playerIndex) => {
           const mark = marks[player.id];
           const injury = mark?.type === "absence" && mark.reason === "injury" ? mark.injury : undefined;
           return (
-            <li key={player.id} className="flex items-center justify-between gap-3 px-4 py-3">
+            <li key={player.id} className="flex items-center justify-between gap-3 p-3">
               <div className="min-w-0">
-                <p className="truncate font-medium">
-                  <span className="mr-2 text-muted-foreground tabular-nums">{player.jerseyNumber}</span>
+                <p className="truncate text-sm font-semibold">
+                  <span className="mr-1.5 font-mono text-muted-foreground">#{player.jerseyNumber}</span>
                   {playerName(player)}
                 </p>
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                  {injury ? <InjuryIcon kind={injury} className="size-4 shrink-0 text-foreground" /> : null}
-                  <span>{mark ? markLabel(mark) : "Brak oceny. To nie jest zero."}</span>
+                <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  {injury ? <InjuryIcon kind={injury} className="size-3.5 shrink-0 text-destructive" /> : null}
+                  <span>{mark ? markLabel(mark) : "Brak oceny"}</span>
                 </p>
               </div>
-              <Button type="button" variant="ghost" size="sm" onClick={() => onEdit(playerIndex)}>
+              <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => onEdit(playerIndex)}>
                 Popraw
               </Button>
             </li>
           );
         })}
       </ul>
-      <div className="mt-6">
-        <Button type="button" variant="outline" size="lg" className="h-11 px-4" onClick={onReset}>
-          <RotateCcw />
-          Wyczyść zapis tej jednostki
-        </Button>
-      </div>
-    </div>
-  );
-}
 
-function Stat({ label, value, tone }: { label: string; value: number; tone: string }) {
-  return (
-    <div className="rounded-md bg-muted/70 px-4 py-3">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={cn("font-heading text-4xl leading-none", tone)}>{value}</dd>
+      <div className="mt-6 flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-10 px-4 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+          disabled={resetting}
+          onClick={onReset}
+        >
+          <RotateCcw className={cn("mr-1.5 size-3.5", resetting && "animate-spin")} />
+          {resetting ? "Czyszczenie..." : "Wyczyść oceny"}
+        </Button>
+
+        <Link href="/trener" className={cn(buttonVariants({ size: "default" }), "h-10 flex-1 px-4 font-semibold text-xs")}>
+          Wróć do listy jednostek
+        </Link>
+      </div>
     </div>
   );
 }

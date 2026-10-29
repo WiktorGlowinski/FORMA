@@ -1,238 +1,382 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Plus, X, Target, Info, Tag } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { formatTrainingDate } from "@/components/coach/data";
 import {
-  TRAININGS,
-  formatTrainingDate,
-  playerName,
-  ratedCount,
-  type Mark,
-  type SquadPlayer,
-  type TrainingSession,
-  type TrainingStatus,
-} from "@/components/coach/data";
-import { useAllMarks, useSquad } from "@/components/coach/use-coach-session";
+  getCoachTrainingsAction,
+  createTrainingAction,
+  type DbTrainingCard,
+} from "@/app/actions/coach";
 import { cn } from "@/lib/utils";
 
-const STATUS_LABEL: Record<TrainingStatus, string> = {
+const STATUS_LABEL: Record<string, string> = {
   scheduled: "Zaplanowany",
   completed: "Zrealizowany",
   cancelled: "Odwołany",
 };
 
-const fieldClass =
-  "mt-1 h-11 w-full rounded-md border-2 border-foreground/15 bg-background px-3 text-sm outline-none transition focus:border-foreground/50";
+const TRAINING_TYPES = [
+  "Taktyczny",
+  "Motoryczny",
+  "Techniczny",
+  "Regeneracyjny",
+  "Mecz kontrolny",
+];
 
 export function TrainingBoard() {
-  const { all, ready: marksReady } = useAllMarks();
-  const { players, ready: squadReady, addPlayer, removePlayer } = useSquad();
-  const ready = marksReady && squadReady;
+  const [trainings, setTrainings] = useState<DbTrainingCard[]>([]);
+  const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  return (
-    <div>
-      <p className="text-sm font-medium tracking-[0.16em] text-primary uppercase">Panel trenera</p>
-      <h1 className="mt-2 max-w-3xl font-heading text-5xl leading-[0.95] font-semibold tracking-wide uppercase sm:text-6xl">
-        Jednostki do oceny
-      </h1>
-      <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
-        Po zrealizowanym treningu przechodzisz skład nazwisko po nazwisku. Minus, zero i plus są względem
-        własnego poziomu zawodnika. Zapis zostaje w tej przeglądarce, dopóki nie podepniemy bazy.
-      </p>
+  // Stan formularza jednostki
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [formDate, setFormDate] = useState("");
+  const [formStart, setFormStart] = useState("17:30");
+  const [formEnd, setFormEnd] = useState("18:45");
+  const [formPlace, setFormPlace] = useState("Boisko główne");
+  const [formTopic, setFormTopic] = useState("");
+  const [formMainGoal, setFormMainGoal] = useState("");
+  const [formTrainingType, setFormTrainingType] = useState("Taktyczny");
+  const [formOrgNote, setFormOrgNote] = useState("");
+  const [formTeamId, setFormTeamId] = useState("");
+  const [formStatus, setFormStatus] = useState<"completed" | "scheduled">("completed");
 
-      {!ready ? (
-        <p className="mt-8 text-sm text-muted-foreground">Odczytuję zapis z tej przeglądarki…</p>
-      ) : (
-        <>
-          <ul className="mt-8 grid gap-4">
-            {TRAININGS.map((training) => (
-              <TrainingCard
-                key={training.id}
-                training={training}
-                players={players}
-                marks={all[training.id] ?? {}}
-              />
-            ))}
-          </ul>
-          <SquadPanel players={players} addPlayer={addPlayer} removePlayer={removePlayer} />
-        </>
-      )}
-    </div>
-  );
-}
-
-function TrainingCard({
-  training,
-  players,
-  marks,
-}: {
-  training: TrainingSession;
-  players: SquadPlayer[];
-  marks: Record<string, Mark>;
-}) {
-  const done = ratedCount(players, marks);
-  const total = players.length;
-  const open = training.status === "completed";
-  const finished = open && done === total;
-  const started = open && done > 0 && !finished;
-
-  return (
-    <li className="print-card overflow-hidden rounded-md border-2 border-foreground/15 bg-card">
-      <div className="mow-stripes flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-chalk sm:px-5">
-        <p className="text-sm capitalize">{formatTrainingDate(training.date)}</p>
-        <p className="text-sm font-medium">
-          {training.teamName} · {training.startTime}–{training.endTime}
-        </p>
-      </div>
-      <div className="flex flex-col gap-4 px-4 py-5 sm:flex-row sm:items-end sm:justify-between sm:px-5">
-        <div>
-          <p className="text-xs tracking-[0.14em] text-muted-foreground uppercase">{STATUS_LABEL[training.status]}</p>
-          <h2 className="mt-1 font-heading text-3xl tracking-tight">{training.place}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {training.topic ?? "Bez tematu"} · {total} zawodników
-          </p>
-          {open ? (
-            <p className="mt-3 text-sm">
-              Oceniono <span className="font-medium tabular-nums">{done} / {total}</span>
-              {done === 0 ? ". Brak oceny nie jest zerem." : ""}
-            </p>
-          ) : (
-            <p className="mt-3 text-sm text-muted-foreground">
-              {training.status === "cancelled"
-                ? "Odwołana jednostka nie prosi o ocenę."
-                : "Ocenę uruchomisz po zakończeniu treningu."}
-            </p>
-          )}
-        </div>
-        {open ? (
-          <Link
-            href={`/trener/${training.id}`}
-            className={cn(buttonVariants({ size: "lg", variant: finished ? "outline" : "default" }), "h-11 px-4")}
-          >
-            {finished ? "Popraw zapis" : started ? "Dokończ ocenę" : "Oceń skład"}
-          </Link>
-        ) : null}
-      </div>
-    </li>
-  );
-}
-
-function SquadPanel({
-  players,
-  addPlayer,
-  removePlayer,
-}: {
-  players: SquadPlayer[];
-  addPlayer: (player: Omit<SquadPlayer, "id">) => void;
-  removePlayer: (id: string) => void;
-}) {
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [jersey, setJersey] = useState("");
-  const [role, setRole] = useState("");
-  const [error, setError] = useState("");
-
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    const first = firstName.trim();
-    const last = lastName.trim();
-    const number = Number.parseInt(jersey, 10);
-    if (!first || !last) {
-      setError("Wpisz imię i nazwisko.");
-      return;
+  async function loadData() {
+    setLoading(true);
+    const res = await getCoachTrainingsAction();
+    if (!res.success) {
+      setError(res.error || "Nie udało się załadować jednostek.");
+    } else {
+      setTrainings(res.trainings);
+      setTeams(res.teams);
+      if (res.teams.length > 0) {
+        setFormTeamId(res.teams[0].id);
+      }
     }
-    if (!Number.isInteger(number) || number < 1 || number > 99) {
-      setError("Numer koszulki ma być od 1 do 99.");
-      return;
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    loadData();
+    setFormDate(new Date().toISOString().split("T")[0]);
+  }, []);
+
+  function handleOpenModal() {
+    if (!formDate) {
+      setFormDate(new Date().toISOString().split("T")[0]);
     }
-    if (players.some((player) => player.jerseyNumber === number)) {
-      setError("Ten numer jest już w składzie.");
-      return;
-    }
-    addPlayer({
-      firstName: first,
-      lastName: last,
-      jerseyNumber: number,
-      role: role.trim() || "Bez pozycji",
+    setIsModalOpen(true);
+  }
+
+  async function handleCreateTraining(e: React.FormEvent) {
+    e.preventDefault();
+    if (!formTeamId) return;
+
+    setSubmitting(true);
+    const currentDate = formDate || new Date().toISOString().split("T")[0];
+
+    const res = await createTrainingAction({
+      teamId: formTeamId,
+      date: currentDate,
+      startTime: `${formStart}:00`,
+      endTime: `${formEnd}:00`,
+      location: formPlace,
+      topic: formTopic,
+      mainGoal: formMainGoal,
+      trainingType: formTrainingType,
+      organizationalNote: formOrgNote,
+      status: formStatus,
     });
-    setFirstName("");
-    setLastName("");
-    setJersey("");
-    setRole("");
-    setError("");
+
+    if (res.success) {
+      setIsModalOpen(false);
+      setFormTopic("");
+      setFormMainGoal("");
+      setFormOrgNote("");
+      await loadData();
+    } else {
+      alert(res.error || "Nie udało się utworzyć jednostki.");
+    }
+    setSubmitting(false);
   }
 
   return (
-    <section className="print-card mt-8 overflow-hidden rounded-md border-2 border-foreground/15 bg-card">
-      <div className="mow-stripes px-4 py-3 text-chalk sm:px-5">
-        <p className="text-sm font-medium">Skład U14 · {players.length} osób</p>
+    <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-sm font-medium tracking-[0.16em] text-primary uppercase">Panel trenera</p>
+          <h1 className="mt-2 max-w-3xl font-heading text-5xl leading-[0.95] font-semibold tracking-wide uppercase sm:text-6xl">
+            Jednostki do oceny
+          </h1>
+        </div>
+        <Button
+          type="button"
+          size="lg"
+          onClick={handleOpenModal}
+          className="h-11 gap-2 shadow-[3px_3px_0_0_var(--foreground)] transition-transform hover:-translate-y-0.5"
+        >
+          <Plus className="size-5" />
+          Dodaj jednostkę
+        </Button>
       </div>
-      <div className="px-4 py-5 sm:px-5">
-        <h2 className="font-heading text-3xl tracking-tight">Dopisz zawodnika</h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          Nowa osoba staje na końcu kolejki przy każdej jednostce U14. Ósemka z przykładu zostaje. Dopisanych
-          możesz usunąć.
-        </p>
-        <form onSubmit={submit} className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <label className="block text-sm">
-            <span className="text-muted-foreground">Imię</span>
-            <input className={fieldClass} value={firstName} autoComplete="off" onChange={(event) => setFirstName(event.target.value)} />
-          </label>
-          <label className="block text-sm">
-            <span className="text-muted-foreground">Nazwisko</span>
-            <input className={fieldClass} value={lastName} autoComplete="off" onChange={(event) => setLastName(event.target.value)} />
-          </label>
-          <label className="block text-sm">
-            <span className="text-muted-foreground">Numer</span>
-            <input
-              className={fieldClass}
-              value={jersey}
-              inputMode="numeric"
-              autoComplete="off"
-              onChange={(event) => setJersey(event.target.value)}
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="text-muted-foreground">Pozycja</span>
-            <input
-              className={fieldClass}
-              value={role}
-              autoComplete="off"
-              placeholder="Np. skrzydłowy"
-              onChange={(event) => setRole(event.target.value)}
-            />
-          </label>
-          <div className="flex items-end">
-            <Button type="submit" size="lg" className="h-11 w-full">
-              Dodaj do składu
-            </Button>
-          </div>
-        </form>
-        {error ? (
-          <p className="mt-3 text-sm text-minus" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <ul className="mt-5 divide-y divide-border rounded-md border-2 border-foreground/15">
-          {players.map((player) => (
-            <li key={player.id} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div className="min-w-0">
-                <p className="truncate font-medium">
-                  <span className="mr-2 text-muted-foreground tabular-nums">{player.jerseyNumber}</span>
-                  {playerName(player)}
-                </p>
-                <p className="text-sm text-muted-foreground">{player.role}</p>
+
+      <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
+        Po zakończonym treningu przechodzisz skład nazwisko po nazwisku. Minus, zero i plus są względem
+        własnego poziomu zawodnika. Wpisy zapisują się bezpośrednio w bazie klubu.
+      </p>
+
+      {/* MODAL Z PEŁNYMI POLAMI BAZY DANYCH */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+          <div className="print-card relative max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-md border-2 border-foreground bg-card p-6 shadow-[6px_6px_0_0_var(--foreground)]">
+            <div className="flex items-center justify-between border-b pb-4">
+              <h2 className="font-heading text-2xl uppercase">Nowa jednostka treningowa</h2>
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="rounded-sm p-1 hover:bg-muted"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateTraining} className="mt-4 space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-foreground">Drużyna</label>
+                  <select
+                    value={formTeamId}
+                    onChange={(e) => setFormTeamId(e.target.value)}
+                    className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 font-medium outline-none focus:border-foreground"
+                  >
+                    {teams.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground">Typ jednostki</label>
+                  <select
+                    value={formTrainingType}
+                    onChange={(e) => setFormTrainingType(e.target.value)}
+                    className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                  >
+                    {TRAINING_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              {player.id.startsWith("extra-") ? (
-                <Button type="button" variant="ghost" size="sm" onClick={() => removePlayer(player.id)}>
-                  Usuń
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-foreground">Data</label>
+                  <input
+                    type="date"
+                    value={formDate}
+                    onChange={(e) => setFormDate(e.target.value)}
+                    required
+                    className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground">Status</label>
+                  <select
+                    value={formStatus}
+                    onChange={(e) => setFormStatus(e.target.value as any)}
+                    className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                  >
+                    <option value="completed">Zrealizowany (do oceny)</option>
+                    <option value="scheduled">Zaplanowany</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-foreground">Start</label>
+                  <input
+                    type="time"
+                    value={formStart}
+                    onChange={(e) => setFormStart(e.target.value)}
+                    required
+                    className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground">Koniec</label>
+                  <input
+                    type="time"
+                    value={formEnd}
+                    onChange={(e) => setFormEnd(e.target.value)}
+                    required
+                    className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-medium text-foreground">Lokalizacja</label>
+                <input
+                  type="text"
+                  value={formPlace}
+                  onChange={(e) => setFormPlace(e.target.value)}
+                  placeholder="np. Boisko główne, Hala Sportowa"
+                  required
+                  className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-foreground">Temat / Akcent</label>
+                <input
+                  type="text"
+                  value={formTopic}
+                  onChange={(e) => setFormTopic(e.target.value)}
+                  placeholder="np. Gra w przewadze po odbiorze piłki"
+                  className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-foreground">Cel główny mikrocyklu</label>
+                <input
+                  type="text"
+                  value={formMainGoal}
+                  onChange={(e) => setFormMainGoal(e.target.value)}
+                  placeholder="np. Poprawa szybkości reakcji w fazie negatywnej"
+                  className="mt-1 h-11 w-full rounded-md border-2 border-foreground/20 bg-background px-3 outline-none focus:border-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-foreground">Notatki organizacyjne dla sztabu</label>
+                <textarea
+                  rows={2}
+                  value={formOrgNote}
+                  onChange={(e) => setFormOrgNote(e.target.value)}
+                  placeholder="np. Zabrać małe bramki; zawodnicy w ochraniaczach"
+                  className="mt-1 w-full rounded-md border-2 border-foreground/20 bg-background p-3 outline-none focus:border-foreground"
+                />
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsModalOpen(false)}
+                  disabled={submitting}
+                >
+                  Anuluj
                 </Button>
-              ) : null}
-            </li>
-          ))}
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? "Zapisuję w bazie…" : "Utwórz jednostkę"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="mt-8 text-sm text-muted-foreground">Łączenie z bazą danych klubu…</p>
+      ) : error ? (
+        <div className="mt-6 rounded-md border-2 border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          {error}
+        </div>
+      ) : trainings.length === 0 ? (
+        <div className="print-card mt-8 rounded-md border-2 border-foreground/15 p-6 text-center text-muted-foreground">
+          Brak zaplanowanych jednostek dla Twoich zespołów.
+        </div>
+      ) : (
+        <ul className="mt-8 grid gap-4">
+          {trainings.map((t) => {
+            const finished = t.status === "completed" && t.evaluatedCount === t.totalPlayers && t.totalPlayers > 0;
+            const started = t.status === "completed" && t.evaluatedCount > 0 && !finished;
+            const open = t.status === "completed";
+
+            return (
+              <li key={t.id} className="print-card overflow-hidden rounded-md border-2 border-foreground/15 bg-card">
+                <div className="mow-stripes flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-chalk sm:px-5">
+                  <div className="flex items-center gap-3">
+                    <p className="text-sm font-medium capitalize">{formatTrainingDate(t.date)}</p>
+                    {t.trainingType && (
+                      <span className="inline-flex items-center gap-1 rounded bg-chalk/20 px-2 py-0.5 text-xs font-semibold tracking-wide uppercase text-chalk">
+                        <Tag className="size-3" />
+                        {t.trainingType}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm font-medium">
+                    {t.teamName} · {t.startTime}–{t.endTime}
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-4 px-4 py-5 sm:flex-row sm:items-end sm:justify-between sm:px-5">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+                        {STATUS_LABEL[t.status]}
+                      </span>
+                      <span className="text-xs text-muted-foreground">·</span>
+                      <span className="text-xs font-medium text-primary">{t.place}</span>
+                    </div>
+
+                    <h2 className="font-heading text-3xl tracking-tight">
+                      {t.topic ?? "Trening bez zadanego tematu"}
+                    </h2>
+
+                    {t.mainGoal && (
+                      <p className="flex items-center gap-1.5 text-sm font-medium text-foreground/90">
+                        <Target className="size-4 text-primary" />
+                        Cel: {t.mainGoal}
+                      </p>
+                    )}
+
+                    {t.organizationalNote && (
+                      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Info className="size-3.5" />
+                        Notatka: {t.organizationalNote}
+                      </p>
+                    )}
+
+                    {open ? (
+                      <p className="pt-1 text-sm">
+                        Oceniono <span className="font-medium tabular-nums">{t.evaluatedCount} / {t.totalPlayers}</span>
+                        {t.evaluatedCount === 0 ? ". Brak oceny nie jest zerem." : ""}
+                      </p>
+                    ) : (
+                      <p className="pt-1 text-sm text-muted-foreground">
+                        {t.status === "cancelled"
+                          ? "Odwołana jednostka nie prosi o ocenę."
+                          : "Ocenę uruchomisz po zakończeniu treningu."}
+                      </p>
+                    )}
+                  </div>
+
+                  {open ? (
+                    <Link
+                      href={`/trener/${t.id}`}
+                      className={cn(buttonVariants({ size: "lg", variant: finished ? "outline" : "default" }), "h-11 px-4 shrink-0")}
+                    >
+                      {finished ? "Popraw zapis" : started ? "Dokończ ocenę" : "Oceń skład"}
+                    </Link>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
         </ul>
-      </div>
-    </section>
+      )}
+    </div>
   );
 }
