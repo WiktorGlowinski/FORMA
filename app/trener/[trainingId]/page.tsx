@@ -1,22 +1,29 @@
 import { Suspense } from "react";
-import { CoachShell } from "@/components/coach/coach-shell";
 import { QuickEvaluation } from "@/components/coach/quick-evaluation";
 
-interface PageProps {
+async function EvaluationContent({
+  paramsPromise,
+}: {
+  paramsPromise: Promise<{ trainingId: string }>;
+}) {
+  const { trainingId } = await paramsPromise;
+  return <QuickEvaluation trainingId={trainingId} />;
+}
+
+export default function TrainingEvaluationPage({
+  params,
+}: {
   params: Promise<{ trainingId: string }>;
-}
-
-export default function TrainingEvaluationPage({ params }: PageProps) {
+}) {
   return (
-    <CoachShell>
-      <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Ładowanie jednostki…</p>}>
-        <EvaluationContent params={params} />
-      </Suspense>
-    </CoachShell>
+    <Suspense
+      fallback={
+        <p className="p-6 font-mono text-xs text-muted-foreground animate-pulse">
+          Ładowanie protokołu jednostki…
+        </p>
+      }
+    >
+      <EvaluationContent paramsPromise={params} />
+    </Suspense>
   );
-}
-
-async function EvaluationContent({ params }: { params: Promise<{ trainingId: string }> }) {
-  const resolved = await params;
-  return <QuickEvaluation trainingId={resolved.trainingId} />;
 }

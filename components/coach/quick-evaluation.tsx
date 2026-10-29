@@ -59,6 +59,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     place: string;
     topic?: string;
     status: string;
+    surveyEnabled?: boolean;
     isOwner?: boolean;
     leadCoachName?: string;
   } | null>(null);
@@ -106,7 +107,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   }, [trainingId]);
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground">Ładowanie protokołu jednostki…</p>;
+    return <p className="text-sm text-muted-foreground font-mono">Ładowanie protokołu jednostki…</p>;
   }
 
   if (errorMsg || !training) {
@@ -171,7 +172,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     setIndex(next);
   }
 
-  // Lista do modalu SOS (wyłącznie gracze z telefonem rodzica)
   const filteredSosPlayers = players.filter(
     (p) =>
       Boolean(p.parentPhone) &&
@@ -238,6 +238,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
             marks={marks}
             resetting={resetting}
             isOwner={isOwner}
+            initialSurveyEnabled={training.surveyEnabled}
             onEdit={goTo}
             onReset={handleReset}
           />
@@ -259,7 +260,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
               </span>
             </div>
 
-            {/* INTERAKTYWNA KARTA ZE STREFAMI WEKTOROWYMI I ZDJĘCIEM ZE STORAGE */}
+            {/* INTERAKTYWNA KARTA ZE STREFAMI WEKTOROWYMI I ZDJĘCIEM */}
             <TinderCard
               key={player.id}
               player={player}
@@ -446,7 +447,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         </div>
       )}
 
-      {/* PEŁNOEKRANOWY MODAL WYBORU NIEOBECNOŚCI */}
+      {/* MODAL WYBORU NIEOBECNOŚCI */}
       {absenceModalOpen && player && (
         <div className="fixed inset-0 z-50 flex flex-col justify-between bg-background/98 p-4 backdrop-blur-md sm:p-8 animate-in fade-in duration-200">
           <div className="mx-auto w-full max-w-lg">
@@ -552,7 +553,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 }
 
 /**
- * KARTA Z OBSŁUGĄ AWATARÓW ZE STORAGE I ZACHOWANYM FALLBACKIEM
+ * KARTA Z OBSŁUGĄ AWATARÓW ZE STORAGE
  */
 function TinderCard({
   player,
@@ -734,7 +735,7 @@ function TinderCard({
           </span>
         </div>
 
-        {/* PROFIL ZAWODNIKA ZE ZDJĘCIEM LUB INICJAŁAMI */}
+        {/* PROFIL ZAWODNIKA */}
         <div className="my-auto flex flex-col items-center text-center">
           <div className="relative size-24 sm:size-28">
             <div className="grid size-full place-items-center rounded-full border-4 border-foreground bg-muted font-heading text-4xl shadow-[3px_3px_0_0_var(--foreground)] overflow-hidden">
@@ -783,7 +784,7 @@ function TinderCard({
 }
 
 /**
- * PODSUMOWANIE JEDNOSTKI
+ * PODSUMOWANIE JEDNOSTKI Z PEŁNYM WEB SHARE I KOPIOWANIEM LINKU
  */
 function Summary({
   trainingId,
@@ -791,6 +792,7 @@ function Summary({
   marks,
   resetting,
   isOwner,
+  initialSurveyEnabled,
   onEdit,
   onReset,
 }: {
@@ -799,12 +801,24 @@ function Summary({
   marks: Record<string, Mark>;
   resetting: boolean;
   isOwner: boolean;
+  initialSurveyEnabled?: boolean;
   onEdit: (index: number) => void;
   onReset: () => void;
 }) {
   const [surveyLoading, setSurveyLoading] = useState(false);
   const [surveyLink, setSurveyLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [canShare, setCanShare] = useState(false);
+
+  useEffect(() => {
+    // Sprawdzenie czy przeglądarka obsługuje natywne dzielenie (smartfony)
+    setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function");
+
+    // Jeśli ankieta była już aktywowana w bazie, ustaw link od razu
+    if (initialSurveyEnabled) {
+      setSurveyLink(`${window.location.origin}/ankieta/${trainingId}`);
+    }
+  }, [initialSurveyEnabled, trainingId]);
 
   const counts = players.reduce(
     (acc, player) => {
@@ -819,21 +833,55 @@ function Summary({
     { minus: 0, zero: 0, plus: 0, absent: 0, missing: 0 }
   );
 
-  async function handleEnableSurvey() {
+  // Natywne udostępnianie na telefonie
+  async function triggerNativeShare(url: string) {
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({
+          title: "FORMA — Ankieta potreningowa",
+          text: "Cześć! Prośba o wypełnienie krótkiej ankiety potreningowej RPE (zajmie 30 sekund):",
+          url: url,
+        });
+        return;
+      } catch (err: any) {
+        if (err.name === "AbortError") return;
+      }
+    }
+    await copyToClipboard(url);
+  }
+
+  // Bezpośrednie kopiowanie do schowka
+  async function copyToClipboard(url: string) {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
+      } catch (err) {
+        console.error("Błąd kopiowania:", err);
+      }
+    }
+  }
+
+  // Pierwsze kliknięcie aktywujące
+  async function handleEnableAndShare() {
     setSurveyLoading(true);
     const res = await enableTrainingSurveyAction(trainingId);
+
     if (res.success && res.surveyUrl) {
       const fullUrl = `${window.location.origin}${res.surveyUrl}`;
       setSurveyLink(fullUrl);
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(fullUrl);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 3000);
+      setSurveyLoading(false);
+
+      if (canShare) {
+        await triggerNativeShare(fullUrl);
+      } else {
+        await copyToClipboard(fullUrl);
       }
     } else {
+      setSurveyLoading(false);
       alert(res.error || "Nie udało się aktywować ankiety.");
     }
-    setSurveyLoading(false);
   }
 
   return (
@@ -864,47 +912,76 @@ function Summary({
         </div>
       </dl>
 
-      {/* ANKIETA POTRENINGOWA RPE */}
-      <div className="mt-5 rounded-xl border-2 border-primary/30 bg-primary/5 p-4">
-        <div>
-          <h3 className="text-xs font-bold uppercase tracking-wider text-primary">Ankieta potreningowa RPE</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Udostępnij link zawodnikom, aby ocenili zmęczenie i jakość treningu.
-          </p>
+      {/* ANKIETA POTRENINGOWA RPE: ZAAWANSOWANE UDOSTĘPNIANIE */}
+      <div className="mt-5 rounded-2xl border-2 border-primary/30 bg-primary/5 p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-heading text-lg uppercase tracking-wide text-primary">
+              Ankieta potreningowa RPE
+            </h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Udostępnij link zawodnikom, aby ocenili zmęczenie i jakość treningu (30 sekund).
+            </p>
+          </div>
+          <span className="rounded-md bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-bold uppercase text-primary shrink-0">
+            24h ważności
+          </span>
         </div>
 
         {surveyLink ? (
-          <div className="mt-3 flex items-center gap-2">
-            <input
-              type="text"
-              readOnly
-              value={surveyLink}
-              className="h-10 flex-1 rounded-lg border-2 border-foreground/20 bg-background px-3 font-mono text-xs outline-none"
-            />
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                navigator.clipboard.writeText(surveyLink);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2500);
-              }}
-              className="h-10 gap-1.5 px-3 font-semibold text-xs"
-            >
-              {copied ? <Check className="size-4" /> : <ClipboardCopy className="size-4" />}
-              {copied ? "Skopiowano" : "Kopiuj"}
-            </Button>
+          <div className="mt-4 space-y-3">
+            {/* PRZYCISKI AKCJI UDOSTĘPNIANIA */}
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              {/* Opcja 1: Natywne udostępnianie na telefonie (WhatsApp, SMS itp.) */}
+              {canShare && (
+                <button
+                  type="button"
+                  onClick={() => triggerNativeShare(surveyLink)}
+                  className="flex-1 flex items-center justify-center gap-2 h-12 rounded-xl bg-primary text-primary-foreground font-heading text-xs uppercase tracking-wider shadow-[2px_2px_0_0_var(--foreground)] active:scale-95 transition-all"
+                >
+                  <Share2 className="size-4" />
+                  <span>Wyślij (WhatsApp / SMS / Inne)</span>
+                </button>
+              )}
+
+              {/* Opcja 2: Kopiowanie do schowka */}
+              <button
+                type="button"
+                onClick={() => copyToClipboard(surveyLink)}
+                className={cn(
+                  "flex items-center justify-center gap-2 h-12 px-5 rounded-xl border-2 font-heading text-xs uppercase tracking-wider shadow-[2px_2px_0_0_var(--foreground)] active:scale-95 transition-all",
+                  canShare ? "sm:w-auto" : "w-full",
+                  copied
+                    ? "border-emerald-600 bg-emerald-600 text-white"
+                    : "border-foreground/20 bg-card hover:bg-muted text-foreground"
+                )}
+              >
+                {copied ? <Check className="size-4 stroke-[3]" /> : <ClipboardCopy className="size-4" />}
+                <span>{copied ? "Skopiowano do schowka!" : "Kopiuj link"}</span>
+              </button>
+            </div>
+
+            {/* Podgląd linku z możliwością zaznaczenia */}
+            <div className="flex items-center gap-2 rounded-xl border-2 border-foreground/15 bg-background p-2">
+              <input
+                type="text"
+                readOnly
+                value={surveyLink}
+                onClick={(e) => (e.target as HTMLInputElement).select()}
+                className="flex-1 bg-transparent px-2 font-mono text-xs text-foreground outline-none select-all truncate"
+              />
+            </div>
           </div>
         ) : (
-          <Button
+          <button
             type="button"
-            onClick={handleEnableSurvey}
             disabled={surveyLoading}
-            className="mt-3 h-11 w-full gap-2 text-xs font-bold uppercase shadow-[2px_2px_0_0_var(--foreground)]"
+            onClick={handleEnableAndShare}
+            className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-primary-foreground font-heading text-xs uppercase tracking-wider shadow-[3px_3px_0_0_var(--foreground)] active:scale-95 transition-all disabled:opacity-50"
           >
             <Share2 className="size-4" />
-            {surveyLoading ? "Aktywowanie..." : "Udostępnij ankietę zawodnikom"}
-          </Button>
+            <span>{surveyLoading ? "Aktywowanie ankiety..." : "Udostępnij ankietę zawodnikom"}</span>
+          </button>
         )}
       </div>
 

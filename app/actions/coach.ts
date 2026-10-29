@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase-server";
+import { supabaseAdmin } from "@/lib/supabase-admin";
 import type { Mark } from "@/components/coach/data";
 
 export interface DbTrainingCard {
@@ -208,7 +209,7 @@ export async function createTrainingAction(payload: {
 }
 
 /**
- * 3. Pobiera dane pojedynczej jednostki, kadrę oraz status właściciela (isOwner)
+ * 3. Pobiera dane pojedynczej jednostki, kadrę oraz status ankiety
  */
 export async function getTrainingEvaluationDataAction(trainingId: string) {
   try {
@@ -231,6 +232,7 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
         status,
         team_id,
         lead_coach_id,
+        survey_enabled,
         teams ( id, name )
       `)
       .eq("id", trainingId)
@@ -240,9 +242,10 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       return { success: false, error: "Nie znaleziono jednostki lub brak do niej uprawnień." };
     }
 
+    // Bezpieczny odczyt nazwiska trenera prowadzącego przez supabaseAdmin
     let leadCoachName = "Trener prowadzący";
     if (training.lead_coach_id) {
-      const { data: coachProfile } = await supabase
+      const { data: coachProfile } = await supabaseAdmin
         .from("profiles")
         .select("full_name")
         .eq("id", training.lead_coach_id)
@@ -310,6 +313,7 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
         place: training.location || "Boisko główne",
         topic: training.topic || undefined,
         status: training.status,
+        surveyEnabled: Boolean(training.survey_enabled),
         isOwner,
         leadCoachName,
       },
@@ -412,7 +416,7 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
 }
 
 /**
- * 6. Aktywuje ankietę RPE i oznacza jednostkę jako zrealizowaną
+ * 6. Aktywuje ankietę RPE i zwraca link (dostępne dla sztabu)
  */
 export async function enableTrainingSurveyAction(trainingId: string) {
   try {
@@ -423,14 +427,33 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     const { data: training, error: trErr } = await supabase
       .from("trainings")
-      .select("id, club_id, lead_coach_id")
+      .select("id, club_id, team_id, lead_coach_id, survey_enabled")
       .eq("id", trainingId)
       .single();
 
     if (trErr || !training) return { success: false, error: "Trening nie istnieje lub brak dostępu." };
 
-    if (training.lead_coach_id && training.lead_coach_id !== user.id) {
-      return { success: false, error: "Tylko trener prowadzący może aktywować ankietę." };
+    // Jeśli ankieta była już aktywowana, od razu zwróć adres
+    if (training.survey_enabled) {
+      return {
+        success: true,
+        surveyUrl: `/ankieta/${trainingId}`,
+      };
+    }
+
+    // Pozwól aktywować ankietę twórcy jednostki LUB trenerowi przypisanemu do tej drużyny
+    const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
+    if (!isOwner) {
+      const { data: assignment } = await supabase
+        .from("team_coaches")
+        .select("id")
+        .eq("team_id", training.team_id)
+        .eq("coach_id", user.id)
+        .maybeSingle();
+
+      if (!assignment) {
+        return { success: false, error: "Brak uprawnień do jednostek tej drużyny." };
+      }
     }
 
     const { data: presentEvals, error: evErr } = await supabase
@@ -455,12 +478,12 @@ export async function enableTrainingSurveyAction(trainingId: string) {
     }));
 
     if (surveyRows.length > 0) {
-      await supabase
+      await supabaseAdmin
         .from("post_training_surveys")
         .upsert(surveyRows, { onConflict: "training_id,player_id" });
     }
 
-    const { error: updateErr } = await supabase
+    const { error: updateErr } = await supabaseAdmin
       .from("trainings")
       .update({
         survey_enabled: true,
