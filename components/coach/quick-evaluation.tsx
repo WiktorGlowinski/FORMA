@@ -12,6 +12,9 @@ import {
   X,
   Minus,
   UserX,
+  Share2,
+  Check,
+  ClipboardCopy,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -29,6 +32,7 @@ import {
   getTrainingEvaluationDataAction,
   savePlayerMarkAction,
   resetTrainingEvaluationsAction,
+  enableTrainingSurveyAction,
 } from "@/app/actions/coach";
 import { cn } from "@/lib/utils";
 
@@ -86,7 +90,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   }, [trainingId]);
 
   if (loading) {
-    return <p className="text-sm text-muted-foreground">Pobieranie protokołu jednostki z bazy danych…</p>;
+    return <p className="text-sm text-muted-foreground">Ładowanie protokołu jednostki…</p>;
   }
 
   if (errorMsg || !training) {
@@ -117,7 +121,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   }
 
   async function handleReset() {
-    if (!window.confirm("Czy na pewno chcesz usunąć wszystkie wystawione oceny dla tego treningu z bazy danych?")) {
+    if (!window.confirm("Czy na pewno chcesz usunąć wszystkie wystawione oceny dla tego treningu?")) {
       return;
     }
     setResetting(true);
@@ -168,6 +172,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
         {finished || !player ? (
           <Summary
+            trainingId={trainingId}
             players={players}
             marks={marks}
             resetting={resetting}
@@ -300,7 +305,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
                   {playerName(player)} (#{player.jerseyNumber})
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Nieobecność nie zaniża średniej ocen (nie jest minusem).
+                  Nieobecność nie zaniża średniej ocen (nie jest traktowana jako minus).
                 </p>
               </div>
               <button
@@ -437,15 +442,9 @@ function TinderCard({
     setDrag({ x: dx, y: dy });
   }
 
-  // Wyliczenie wektora przesunięcia i kąta w stopniach (-180 do +180)
   const distance = Math.hypot(drag.x, drag.y);
   const angle = (Math.atan2(drag.y, drag.x) * 180) / Math.PI;
 
-  // Strefy kątowe z szerokim zakresem dla pionu (110 stopni zamiast 90):
-  // GÓRA: -145° do -35°
-  // DÓŁ:   35° do 145°
-  // PRAWO: -35° do 35°
-  // LEWO:  reszta (poza -145°..145°)
   let activeDirection: "left" | "right" | "up" | "down" | null = null;
   if (distance > 22) {
     if (angle >= -145 && angle <= -35) {
@@ -463,7 +462,7 @@ function TinderCard({
     if (!isDragging || flyDirection) return;
     setIsDragging(false);
 
-    const threshold = 70; // Wymagany dystans przesunięcia
+    const threshold = 70;
 
     if (distance >= threshold && activeDirection) {
       if (activeDirection === "right") {
@@ -491,7 +490,6 @@ function TinderCard({
     setDrag({ x: 0, y: 0 });
   }
 
-  // Płynna przezroczystość stempla powiązana wyłącznie z dominującym kierunkiem
   const stampStrength = Math.min(Math.max((distance - 20) / 55, 0), 1);
   const opacityLeft = activeDirection === "left" ? stampStrength : 0;
   const opacityRight = activeDirection === "right" ? stampStrength : 0;
@@ -511,7 +509,6 @@ function TinderCard({
     transformStyle = "translate3d(0, -90px, 0) scale(0.85)";
     opacityStyle = 0;
   } else {
-    // Tłumimy rotację, jeśli ruch idzie głównie w pionie, by karta nie chwiała się na boki
     const isVerticalMove = activeDirection === "up" || activeDirection === "down";
     const rotate = isVerticalMove ? drag.x * 0.02 : drag.x * 0.08;
     transformStyle = `translate3d(${drag.x}px, ${drag.y}px, 0) rotate(${rotate}deg)`;
@@ -602,14 +599,14 @@ function TinderCard({
           </div>
         </div>
 
-        {/* DOLNY STATUS W BAZIE */}
+        {/* DOLNY STATUS */}
         <div className="border-t border-border/80 pt-2.5 text-center text-[11px] text-muted-foreground">
           {currentMark ? (
             <p className="text-foreground">
-              Zapis w bazie: <span className="font-bold underline">{markLabel(currentMark)}</span>
+              Wystawiona ocena: <span className="font-bold underline">{markLabel(currentMark)}</span>
             </p>
           ) : (
-            <p>Brak zapisu — przeciągnij lub kliknij przycisk</p>
+            <p>Brak oceny — przeciągnij lub użyj przycisku</p>
           )}
         </div>
       </div>
@@ -621,18 +618,24 @@ function TinderCard({
  * PODSUMOWANIE JEDNOSTKI
  */
 function Summary({
+  trainingId,
   players,
   marks,
   resetting,
   onEdit,
   onReset,
 }: {
+  trainingId: string;
   players: SquadPlayer[];
   marks: Record<string, Mark>;
   resetting: boolean;
   onEdit: (index: number) => void;
   onReset: () => void;
 }) {
+  const [surveyLoading, setSurveyLoading] = useState(false);
+  const [surveyLink, setSurveyLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
   const counts = players.reduce(
     (acc, player) => {
       const mark = marks[player.id];
@@ -646,14 +649,32 @@ function Summary({
     { minus: 0, zero: 0, plus: 0, absent: 0, missing: 0 }
   );
 
+  async function handleEnableSurvey() {
+    setSurveyLoading(true);
+    const res = await enableTrainingSurveyAction(trainingId);
+    if (res.success && res.surveyUrl) {
+      const fullUrl = `${window.location.origin}${res.surveyUrl}`;
+      setSurveyLink(fullUrl);
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(fullUrl);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 3000);
+      }
+    } else {
+      alert(res.error || "Nie udało się aktywować ankiety.");
+    }
+    setSurveyLoading(false);
+  }
+
   return (
     <div className="step-in p-4 sm:p-8">
-      <p className="text-xs font-bold tracking-widest text-primary uppercase">Skład zamknięty</p>
-      <h2 className="mt-1 font-heading text-3xl tracking-tight sm:text-4xl">Wszyscy ocenieni.</h2>
+      <p className="text-xs font-bold tracking-widest text-primary uppercase">Protokół zamknięty</p>
+      <h2 className="mt-1 font-heading text-3xl tracking-tight sm:text-4xl">Wszyscy zawodnicy ocenieni.</h2>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
-        Nieobecności i kontuzje zostały odseparowane od sportowej krzywej ocen. Wszystko zapisano w PostgreSQL.
+        Nieobecności i zgłoszone kontuzje zostały wyłączone ze sportowego bilansu formy zespołu.
       </p>
 
+      {/* STATYSTYKI OCEN */}
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-lg border-2 border-minus/40 bg-minus/10 p-3">
           <dt className="text-[11px] font-semibold text-minus uppercase">Słabiej (−)</dt>
@@ -673,6 +694,51 @@ function Summary({
         </div>
       </dl>
 
+      {/* ANKIETA POTRENINGOWA RPE */}
+      <div className="mt-5 rounded-xl border-2 border-primary/30 bg-primary/5 p-4">
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-primary">Ankieta potreningowa RPE</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Udostępnij link zawodnikom, aby ocenili zmęczenie i jakość treningu.
+          </p>
+        </div>
+
+        {surveyLink ? (
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              type="text"
+              readOnly
+              value={surveyLink}
+              className="h-10 flex-1 rounded-lg border-2 border-foreground/20 bg-background px-3 font-mono text-xs outline-none"
+            />
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                navigator.clipboard.writeText(surveyLink);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2500);
+              }}
+              className="h-10 gap-1.5 px-3 font-semibold text-xs"
+            >
+              {copied ? <Check className="size-4" /> : <ClipboardCopy className="size-4" />}
+              {copied ? "Skopiowano" : "Kopiuj"}
+            </Button>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            onClick={handleEnableSurvey}
+            disabled={surveyLoading}
+            className="mt-3 h-11 w-full gap-2 text-xs font-bold uppercase shadow-[2px_2px_0_0_var(--foreground)]"
+          >
+            <Share2 className="size-4" />
+            {surveyLoading ? "Aktywowanie..." : "Udostępnij ankietę zawodnikom"}
+          </Button>
+        )}
+      </div>
+
+      {/* LISTA ZAWODNIKÓW */}
       <ul className="mt-4 divide-y divide-border rounded-lg border-2 border-foreground/20 bg-card">
         {players.map((player, playerIndex) => {
           const mark = marks[player.id];
@@ -697,6 +763,7 @@ function Summary({
         })}
       </ul>
 
+      {/* PRZYCISKI KOŃCOWE */}
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <Button
           type="button"
@@ -707,7 +774,7 @@ function Summary({
           onClick={onReset}
         >
           <RotateCcw className={cn("mr-1.5 size-3.5", resetting && "animate-spin")} />
-          {resetting ? "Czyszczenie..." : "Wyczyść oceny"}
+          {resetting ? "Resetowanie..." : "Wyczyść oceny"}
         </Button>
 
         <Link href="/trener" className={cn(buttonVariants({ size: "default" }), "h-10 flex-1 px-4 font-semibold text-xs")}>

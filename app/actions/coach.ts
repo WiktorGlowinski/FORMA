@@ -385,3 +385,70 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
     return { success: false, error: err.message };
   }
 }
+/**
+ * 6. Włącza ankietę RPE dla obecnych zawodników i zwraca link do udostępnienia
+ */
+export async function enableTrainingSurveyAction(trainingId: string) {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: 'Brak autoryzacji.' };
+
+    // 1. Pobierz dane jednostki
+    const { data: training, error: trErr } = await supabaseAdmin
+      .from('trainings')
+      .select('id, club_id, survey_enabled')
+      .eq('id', trainingId)
+      .single();
+
+    if (trErr || !training) return { success: false, error: 'Trening nie istnieje.' };
+
+    // 2. Pobierz obecnych zawodników z tej jednostki
+    const { data: presentEvals, error: evErr } = await supabaseAdmin
+      .from('evaluations')
+      .select('player_id')
+      .eq('training_id', trainingId)
+      .eq('is_present', true);
+
+    if (evErr) throw evErr;
+
+    // 3. Wygeneruj wpisy w post_training_surveys (jeśli jeszcze nie istnieją)
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24); // Ważność: 24h
+
+    const surveyRows = (presentEvals || []).map((e: any) => ({
+      club_id: training.club_id,
+      training_id: trainingId,
+      player_id: e.player_id,
+      recipient: 'player',
+      expires_at: expiresAt.toISOString(),
+      is_completed: false,
+    }));
+
+    if (surveyRows.length > 0) {
+      await supabaseAdmin
+        .from('post_training_surveys')
+        .upsert(surveyRows, { onConflict: 'training_id,player_id' });
+    }
+
+    // 4. Ustaw survey_enabled = true oraz evaluation_status = completed w trainings
+    await supabaseAdmin
+      .from('trainings')
+      .update({
+        survey_enabled: true,
+        evaluation_status: 'completed',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', trainingId);
+
+    revalidatePath(`/trener/${trainingId}`);
+    revalidatePath('/trener');
+
+    return {
+      success: true,
+      surveyUrl: `/ankieta/${trainingId}`,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
