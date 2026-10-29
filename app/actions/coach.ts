@@ -22,6 +22,17 @@ export interface DbTrainingCard {
   totalPlayers: number;
 }
 
+export interface SurveyStatusItem {
+  id: string;
+  playerId: string;
+  playerName: string;
+  jerseyNumber: number | null;
+  isCompleted: boolean;
+  fatigue: number | null;
+  satisfaction: number | null;
+  surveyUrl: string;
+}
+
 /**
  * 1. Pobiera listę jednostek treningowych i zespołów przypisanych do trenera (RLS)
  */
@@ -34,7 +45,6 @@ export async function getCoachTrainingsAction() {
       return { success: false, error: "Brak aktywnej sesji użytkownika.", trainings: [], teams: [] };
     }
 
-    // Dzięki RLS otrzymujemy tylko zespoły przypisane do zalogowanego trenera
     const { data: teams, error: teamsErr } = await supabase
       .from("teams")
       .select("id, name")
@@ -42,7 +52,6 @@ export async function getCoachTrainingsAction() {
 
     if (teamsErr) throw teamsErr;
 
-    // Dzięki RLS pobieramy jednostki tylko dla zespołów trenera
     const { data: trainings, error: trErr } = await supabase
       .from("trainings")
       .select(`
@@ -65,7 +74,6 @@ export async function getCoachTrainingsAction() {
 
     const trainingIds = (trainings || []).map((t: any) => t.id);
 
-    // Zliczenie liczby ocen per jednostka
     let evalsByTraining: Record<string, number> = {};
     if (trainingIds.length > 0) {
       const { data: evals } = await supabase
@@ -78,7 +86,6 @@ export async function getCoachTrainingsAction() {
       });
     }
 
-    // Zliczenie liczby zawodników w kadrze poszczególnych drużyn
     const teamIds = (teams || []).map((t: any) => t.id);
     let playersCountByTeam: Record<string, number> = {};
     if (teamIds.length > 0) {
@@ -109,7 +116,7 @@ export async function getCoachTrainingsAction() {
         mainGoal: t.main_goal || undefined,
         trainingType: t.training_type || undefined,
         organizationalNote: t.organizational_note || undefined,
-        status: t.status || "planned",
+        status: t.status || "scheduled",
         evaluatedCount: evalsByTraining[t.id] || 0,
         totalPlayers: playersCountByTeam[tId] || 0,
       };
@@ -148,7 +155,6 @@ export async function createTrainingAction(payload: {
       return { success: false, error: "Brak aktywnej sesji trenera." };
     }
 
-    // Pobranie club_id drużyny
     const { data: team, error: teamErr } = await supabase
       .from("teams")
       .select("club_id")
@@ -159,7 +165,6 @@ export async function createTrainingAction(payload: {
       return { success: false, error: "Nie masz uprawnień do dodawania jednostek dla tej drużyny." };
     }
 
-    // Wstawianie rekordu ze statusem 'scheduled' / 'completed' bez wymuszania evaluation_status
     const { data, error } = await supabase
       .from("trainings")
       .insert({
@@ -223,7 +228,6 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
 
     const teamObj = Array.isArray(training.teams) ? training.teams[0] : training.teams;
 
-    // Pobranie tylko istniejących kolumn z tabeli players
     const { data: rawPlayers, error: plErr } = await supabase
       .from("players")
       .select("id, first_name, last_name, jersey_number")
@@ -240,7 +244,6 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       role: "Zawodnik",
     }));
 
-    // Pobranie wpisów ocen (kolumna oceny to score, notatki w comment)
     const { data: rawEvals, error: evErr } = await supabase
       .from("evaluations")
       .select("player_id, score, is_present, absence_reason, comment")
@@ -376,7 +379,6 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     if (trErr || !training) return { success: false, error: "Trening nie istnieje lub brak dostępu." };
 
-    // Pobranie tylko obecnych zawodników na jednostce
     const { data: presentEvals, error: evErr } = await supabase
       .from("evaluations")
       .select("player_id")
@@ -404,7 +406,6 @@ export async function enableTrainingSurveyAction(trainingId: string) {
         .upsert(surveyRows, { onConflict: "training_id,player_id" });
     }
 
-    // Aktualizacja statusu jednostki i włączenie flagi ankiety
     const { error: updateErr } = await supabase
       .from("trainings")
       .update({
@@ -425,5 +426,74 @@ export async function enableTrainingSurveyAction(trainingId: string) {
     };
   } catch (err: any) {
     return { success: false, error: err.message };
+  }
+}
+
+/**
+ * 7. Pobiera listę ankiet RPE i uniwersalny tekst do udostępnienia (RLS)
+ */
+export async function getTrainingSurveysStatusAction(trainingId: string): Promise<{
+  success: boolean;
+  surveys: SurveyStatusItem[];
+  shareText?: string;
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return { success: false, error: "Brak autoryzacji.", surveys: [] };
+
+    const { data: training } = await supabase
+      .from("trainings")
+      .select("date, topic")
+      .eq("id", trainingId)
+      .single();
+
+    const { data, error } = await supabase
+      .from("post_training_surveys")
+      .select(`
+        id,
+        token,
+        is_completed,
+        fatigue,
+        satisfaction,
+        feedback_note,
+        player_id,
+        players!inner ( id, first_name, last_name, jersey_number )
+      `)
+      .eq("training_id", trainingId);
+
+    if (error) throw error;
+
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
+    const surveys: SurveyStatusItem[] = (data || []).map((s: any) => {
+      const p = Array.isArray(s.players) ? s.players[0] : s.players;
+      return {
+        id: s.id,
+        playerId: s.player_id,
+        playerName: p ? `${p.first_name} ${p.last_name}` : "Zawodnik",
+        jerseyNumber: p?.jersey_number ?? null,
+        isCompleted: Boolean(s.is_completed),
+        fatigue: s.fatigue,
+        satisfaction: s.satisfaction,
+        surveyUrl: `${baseUrl}/ankieta/${s.token}`,
+      };
+    });
+
+    const trainingHeader = training?.date 
+      ? ` (${training.date}${training.topic ? ` - ${training.topic}` : ""})` 
+      : "";
+
+    const linksList = surveys
+      .map((s, idx) => `${idx + 1}. ${s.playerName}: ${s.surveyUrl}`)
+      .join("\n");
+
+    const shareText = `FORMA — Ankieta potreningowa${trainingHeader}\nProśba o wypełnienie krótkiej oceny samopoczucia (30 sekund):\n\n${linksList}\n\nLink wygasa za 24h.`;
+
+    return { success: true, surveys, shareText };
+  } catch (err: any) {
+    return { success: false, error: err.message, surveys: [] };
   }
 }
