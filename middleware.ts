@@ -2,6 +2,14 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 
 export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  const isPublicRoute =
+    pathname === '/' ||
+    pathname.startsWith('/survey') ||
+    pathname.startsWith('/ankieta') ||
+    pathname.startsWith('/login');
+
   let response = NextResponse.next({ request: { headers: request.headers } });
 
   const supabase = createServerClient(
@@ -21,15 +29,15 @@ export async function middleware(request: NextRequest) {
     }
   );
 
+  // Jeśli to trasa publiczna, nie blokujemy żądania zapytaniem do bazy Supabase Auth
+  if (isPublicRoute) {
+    return response;
+  }
+
+  // Weryfikacja sesji TYLKO dla chronionych tras (/trener, /admin itp.)
   const { data: { user } } = await supabase.auth.getUser();
 
-  const isPublicRoute =
-    request.nextUrl.pathname === '/' ||
-    request.nextUrl.pathname.startsWith('/survey') ||
-    request.nextUrl.pathname.startsWith('/login');
-
-  // Przekierowanie do logowania w przypadku braku sesji
-  if (!user && !isPublicRoute) {
+  if (!user) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 

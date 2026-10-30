@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useCoachStore } from "@/store/useCoachStore";
 import Link from "next/link";
 import {
   Plus,
@@ -98,16 +99,17 @@ function calculateEndTime(startH: number, startM: number, durationMinutes: numbe
 }
 
 export function TrainingBoard() {
-  const [trainings, setTrainings] = useState<DbTrainingCard[]>([]);
-  const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { trainings: cachedTrainings, teams: cachedTeams, setTrainingsData } = useCoachStore();
+
+  const trainings = cachedTrainings || [];
+  const teams = cachedTeams || [];
+
+  const [loading, setLoading] = useState(!cachedTrainings);
   const [error, setError] = useState<string | null>(null);
 
-  // Domyślnie "all", aby trener po wejściu od razu widział swoje jednostki
   const [activeTab, setActiveTab] = useState<"all" | "pending" | "history">("all");
   const [selectedTeamId, setSelectedTeamId] = useState<string>("all");
 
-  // Kreator jednostki
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -133,14 +135,18 @@ export function TrainingBoard() {
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
 
-  async function loadData() {
+  async function loadData(force = false) {
+    if (cachedTrainings && cachedTeams && !force) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     const res = await getCoachTrainingsAction();
     if (!res.success) {
       setError(res.error || "Nie udało się załadować jednostek.");
     } else {
-      setTrainings(res.trainings);
-      setTeams(res.teams);
+      setTrainingsData(res.trainings, res.teams);
       if (res.teams.length > 0 && !teamId) {
         setTeamId(res.teams[0].id);
       }
@@ -153,6 +159,12 @@ export function TrainingBoard() {
     const todayStr = new Date().toISOString().split("T")[0];
     setCustomDate(todayStr);
   }, []);
+
+  useEffect(() => {
+    if (teams.length > 0 && !teamId) {
+      setTeamId(teams[0].id);
+    }
+  }, [teams, teamId]);
 
   function handleOpenWizard() {
     setStep(1);
@@ -210,7 +222,7 @@ export function TrainingBoard() {
       setMainGoal("");
       setOrgNote("");
       setCustomLocation("");
-      await loadData();
+      await loadData(true);
     } else {
       alert(res.error || "Wystąpił błąd podczas tworzenia jednostki.");
     }
@@ -243,11 +255,9 @@ export function TrainingBoard() {
   const formattedStart = `${String(customHour).padStart(2, "0")}:${String(customMinute).padStart(2, "0")}`;
   const formattedEnd = calculateEndTime(customHour, customMinute, durationMinutes);
 
-  // Bezpieczne sprawdzanie czy jednostka jest w pełni oceniona
   const isFullyEvaluated = (t: DbTrainingCard) =>
     t.status === "completed" && t.evaluatedCount >= t.totalPlayers && t.totalPlayers > 0;
 
-  // Filtrowanie jednostek bez odrzucania treningów innego trenera ze sztabu
   const filteredTrainings = trainings.filter((t) => {
     if (selectedTeamId !== "all" && t.teamId !== selectedTeamId) {
       return false;
@@ -258,7 +268,7 @@ export function TrainingBoard() {
     if (activeTab === "history") {
       return isFullyEvaluated(t);
     }
-    return true; // "all"
+    return true;
   });
 
   const pendingCount = trainings.filter((t) => !isFullyEvaluated(t)).length;
@@ -266,8 +276,6 @@ export function TrainingBoard() {
 
   return (
     <div className="mx-auto max-w-2xl pb-16">
-      
-      {/* NAGŁÓWEK TABLICY */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-bold tracking-[0.16em] text-primary uppercase">
@@ -293,10 +301,7 @@ export function TrainingBoard() {
         Po treningu przechodzisz skład nazwisko po nazwisku. Wystawione oceny tworzą historię rozwoju zawodnika.
       </p>
 
-      {/* CZYTELNY PASEK KONTROLNY: ZAKŁADKI I FILTR DRUŻYN */}
       <div className="mt-6 space-y-3 rounded-2xl border-2 border-foreground/20 bg-card p-4 shadow-sm">
-        
-        {/* Rząd 1: Główne zakładki */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/80 pb-3">
           <div className="flex items-center gap-1.5">
             <button
@@ -344,7 +349,6 @@ export function TrainingBoard() {
           </span>
         </div>
 
-        {/* Rząd 2: Pigułki drużyn (tylko gdy trener ma dostęp do więcej niż 1 drużyny) */}
         {teams.length > 1 && (
           <div className="flex flex-wrap items-center gap-1.5 pt-1">
             <span className="font-mono text-[10px] font-bold uppercase text-muted-foreground mr-1 flex items-center gap-1">
@@ -379,10 +383,8 @@ export function TrainingBoard() {
             ))}
           </div>
         )}
-
       </div>
 
-      {/* LISTA KAFELKÓW TRENINGOWYCH */}
       {loading ? (
         <p className="mt-8 text-center text-xs font-mono text-muted-foreground">Pobieranie jednostek treningowych…</p>
       ) : error ? (
@@ -410,7 +412,6 @@ export function TrainingBoard() {
                 key={t.id}
                 className="print-card overflow-hidden rounded-2xl border-2 border-foreground/20 bg-card shadow-sm hover:border-foreground/35 transition-all"
               >
-                {/* Górny czysty pasek trawy (mow-stripes) */}
                 <div className="mow-stripes flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-chalk">
                   <div className="flex items-center gap-2">
                     <p className="text-xs font-semibold capitalize tracking-wide">
@@ -429,10 +430,7 @@ export function TrainingBoard() {
                   </p>
                 </div>
 
-                {/* Środek karty */}
                 <div className="p-4 sm:p-5 space-y-3">
-                  
-                  {/* Linia statusu obiektu oraz wyraźna plakietka autora */}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 pb-3">
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
@@ -445,7 +443,6 @@ export function TrainingBoard() {
                       </span>
                     </div>
 
-                    {/* Badge autorstwa */}
                     {t.isOwner ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-600/30 font-mono text-[10px] font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">
                         <UserCheck className="size-3" />
@@ -459,7 +456,6 @@ export function TrainingBoard() {
                     )}
                   </div>
 
-                  {/* Temat i cele */}
                   <div>
                     <h2 className="font-heading text-2xl tracking-tight sm:text-3xl">
                       {t.topic ?? "Trening bez zadanego tematu"}
@@ -480,10 +476,7 @@ export function TrainingBoard() {
                     )}
                   </div>
 
-                  {/* Dolny pasek: frekwencja + dedykowany przycisk */}
                   <div className="pt-2 border-t border-border/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    
-                    {/* Status ocen */}
                     <div>
                       {completed ? (
                         <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
@@ -503,7 +496,6 @@ export function TrainingBoard() {
                       )}
                     </div>
 
-                    {/* Przycisk akcji */}
                     {canOpen ? (
                       <Link
                         href={`/trener/${t.id}`}
@@ -529,9 +521,7 @@ export function TrainingBoard() {
                         )}
                       </Link>
                     ) : null}
-
                   </div>
-
                 </div>
               </li>
             );
@@ -539,7 +529,6 @@ export function TrainingBoard() {
         </ul>
       )}
 
-      {/* PEŁNOEKRANOWY KREATOR GESTOWY */}
       {isWizardOpen && (
         <div
           onTouchStart={handleTouchStart}
@@ -572,7 +561,6 @@ export function TrainingBoard() {
               </div>
             </div>
 
-            {/* KROK 1 */}
             {step === 1 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
                 <div>
@@ -903,7 +891,6 @@ export function TrainingBoard() {
               </div>
             )}
 
-            {/* KROK 2 */}
             {step === 2 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
                 <div>
@@ -967,7 +954,6 @@ export function TrainingBoard() {
               </div>
             )}
 
-            {/* KROK 3 */}
             {step === 3 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
                 <div className="rounded-xl border-2 border-primary/30 bg-primary/5 p-3.5 text-xs text-muted-foreground">
@@ -1012,7 +998,6 @@ export function TrainingBoard() {
               </div>
             )}
 
-            {/* PASEK NAWIGACJI KROKÓW */}
             <div className="border-t pt-3">
               <div className="flex items-center gap-2">
                 {step > 1 ? (
@@ -1081,7 +1066,6 @@ export function TrainingBoard() {
           </div>
         </div>
       )}
-
     </div>
   );
 }

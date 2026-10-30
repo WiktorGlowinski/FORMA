@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useCoachStore } from "@/store/useCoachStore";
 import Link from "next/link";
 import {
   ChevronLeft,
@@ -47,7 +48,17 @@ export type EvaluationPlayer = SquadPlayer & {
 };
 
 export function QuickEvaluation({ trainingId }: { trainingId: string }) {
-  const [loading, setLoading] = useState(true);
+  const {
+    evaluationsCache,
+    cacheEvaluationData,
+    updateMarkInCache,
+    resetCachedMarks,
+    updateCachedSurveyStatus,
+  } = useCoachStore();
+
+  const cached = evaluationsCache[trainingId];
+
+  const [loading, setLoading] = useState(!cached);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [training, setTraining] = useState<{
@@ -62,19 +73,28 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     surveyEnabled?: boolean;
     isOwner?: boolean;
     leadCoachName?: string;
-  } | null>(null);
-  const [players, setPlayers] = useState<EvaluationPlayer[]>([]);
-  const [marks, setMarks] = useState<Record<string, Mark>>({});
+  } | null>(cached?.training || null);
+  const [players, setPlayers] = useState<EvaluationPlayer[]>(cached?.squad || []);
+  const [marks, setMarks] = useState<Record<string, Mark>>(cached?.initialMarks || {});
   const [index, setIndex] = useState(0);
 
   const [absenceModalOpen, setAbsenceModalOpen] = useState(false);
   const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<AbsenceReason | null>(null);
 
-  // Stan modalu kontaktów awaryjnych (SOS)
   const [sosModalOpen, setSosModalOpen] = useState(false);
   const [sosSearch, setSosSearch] = useState("");
 
   useEffect(() => {
+    if (cached) {
+      const firstUnrated = cached.squad.findIndex((p: SquadPlayer) => !cached.initialMarks?.[p.id]);
+      if (firstUnrated !== -1) {
+        setIndex(firstUnrated);
+      } else if (cached.squad.length > 0) {
+        setIndex(cached.squad.length);
+      }
+      return;
+    }
+
     async function init() {
       if (!trainingId) {
         setErrorMsg("Brak identyfikatora jednostki treningowej.");
@@ -90,21 +110,30 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       if (!res.success) {
         setErrorMsg(res.error || "Nie udało się pobrać jednostki.");
       } else if (res.training && res.squad) {
-        setTraining(res.training);
-        setPlayers(res.squad as EvaluationPlayer[]);
-        setMarks(res.initialMarks || {});
+        const squad = res.squad as EvaluationPlayer[];
+        const initialMarks = res.initialMarks || {};
 
-        const firstUnrated = res.squad.findIndex((p: SquadPlayer) => !res.initialMarks?.[p.id]);
+        setTraining(res.training);
+        setPlayers(squad);
+        setMarks(initialMarks);
+
+        cacheEvaluationData(trainingId, {
+          training: res.training,
+          squad,
+          initialMarks,
+        });
+
+        const firstUnrated = squad.findIndex((p: SquadPlayer) => !initialMarks[p.id]);
         if (firstUnrated !== -1) {
           setIndex(firstUnrated);
-        } else if (res.squad.length > 0) {
-          setIndex(res.squad.length);
+        } else if (squad.length > 0) {
+          setIndex(squad.length);
         }
       }
       setLoading(false);
     }
     init();
-  }, [trainingId]);
+  }, [trainingId, cached, cacheEvaluationData]);
 
   if (loading) {
     return <p className="text-sm text-muted-foreground font-mono">Ładowanie protokołu jednostki…</p>;
@@ -128,7 +157,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   const finished = index >= total;
   const isOwner = training.isOwner ?? true;
 
-  // Sprawdzenie obecności numerów rodziców w kadrze (filtr junior / senior)
   const hasAnyParentContacts = players.some((p) => Boolean(p.parentPhone));
 
   async function commit(mark: Mark) {
@@ -142,6 +170,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     setSelectedAbsenceReason(null);
     setIndex((current) => Math.min(current + 1, total));
 
+    updateMarkInCache(trainingId, player.id, mark);
     await savePlayerMarkAction(trainingId, player.id, mark);
   }
 
@@ -160,6 +189,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       setIndex(0);
       setAbsenceModalOpen(false);
       setSelectedAbsenceReason(null);
+      resetCachedMarks(trainingId);
     } else {
       alert(res.error || "Wystąpił błąd podczas usuwania ocen.");
     }
@@ -180,14 +210,12 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
   return (
     <div className="mx-auto max-w-xl pb-8">
-      {/* NAGŁÓWEK POWROTU ORAZ PRZYCISK SOS DLA RODZICÓW */}
       <div className="flex items-center justify-between gap-2">
         <Link href="/trener" className="pitch-link text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           ← Wróć do jednostek
         </Link>
 
         <div className="flex items-center gap-2">
-          {/* PRZYCISK SOS — TYLKO DLA ROCZNIKÓW POSIADAJĄCYCH NUMERY DO RODZICÓW */}
           {hasAnyParentContacts && (
             <button
               type="button"
@@ -205,7 +233,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         </div>
       </div>
 
-      {/* BANER INFORMACYJNY JEŚLI JEDNOSTKĘ PROWADZI INNY TRENER */}
       {!isOwner && (
         <div className="mt-2.5 flex items-center justify-between rounded-lg border-2 border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2">
@@ -217,7 +244,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       )}
 
       <div className="print-card mt-3 overflow-hidden rounded-xl border-2 border-foreground/20 bg-card shadow-sm">
-        {/* PASEK POSTĘPU */}
         <div className="mow-stripes flex items-center justify-between gap-3 px-4 py-2.5 text-chalk">
           <p className="text-xs font-medium uppercase tracking-wider">Ocena składu</p>
           <p className="font-mono text-xs font-bold tabular-nums">
@@ -241,10 +267,10 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
             initialSurveyEnabled={training.surveyEnabled}
             onEdit={goTo}
             onReset={handleReset}
+            onSurveyActivated={() => updateCachedSurveyStatus(trainingId, true)}
           />
         ) : (
           <div className="p-3 sm:p-5">
-            {/* SUBTELNY PASEK GESTÓW */}
             <div className="mb-3 flex items-center justify-between rounded-lg border border-foreground/10 bg-muted/40 px-3 py-1.5 font-mono text-[11px] font-semibold tracking-tight text-muted-foreground">
               <span className="flex items-center gap-1 text-minus">
                 <ArrowLeft className="size-3" /> Słabiej
@@ -260,7 +286,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
               </span>
             </div>
 
-            {/* INTERAKTYWNA KARTA ZE STREFAMI WEKTOROWYMI I ZDJĘCIEM */}
             <TinderCard
               key={player.id}
               player={player}
@@ -278,7 +303,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
               }}
             />
 
-            {/* KOMPAKTOWY DOCK PRZYCISKÓW */}
             <div className="mt-4 flex flex-col items-center gap-2.5">
               <div className="flex w-full items-center justify-center gap-3">
                 <button
@@ -363,7 +387,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         )}
       </div>
 
-      {/* MODAL KONTAKTÓW AWARYJNYCH DO RODZICÓW (SOS) */}
       {sosModalOpen && (
         <div className="fixed inset-0 z-50 flex flex-col justify-between bg-background/98 p-4 backdrop-blur-md sm:p-8 animate-in fade-in duration-200">
           <div className="mx-auto w-full max-w-lg">
@@ -447,7 +470,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         </div>
       )}
 
-      {/* MODAL WYBORU NIEOBECNOŚCI */}
       {absenceModalOpen && player && (
         <div className="fixed inset-0 z-50 flex flex-col justify-between bg-background/98 p-4 backdrop-blur-md sm:p-8 animate-in fade-in duration-200">
           <div className="mx-auto w-full max-w-lg">
@@ -552,9 +574,6 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   );
 }
 
-/**
- * KARTA Z OBSŁUGĄ AWATARÓW ZE STORAGE
- */
 function TinderCard({
   player,
   index,
@@ -696,7 +715,6 @@ function TinderCard({
           disabled && "cursor-default active:cursor-default"
         )}
       >
-        {/* STEMPLE GRAFICZNE */}
         <div
           style={{ opacity: opacityLeft }}
           className="pointer-events-none absolute top-6 right-6 rotate-12 rounded-lg border-4 border-minus bg-background/95 px-4 py-1.5 text-xl font-black tracking-widest text-minus uppercase shadow-md"
@@ -725,7 +743,6 @@ function TinderCard({
           Nieobecność (↓)
         </div>
 
-        {/* GÓRNY PASEK KARTY */}
         <div className="flex items-center justify-between border-b border-border/80 pb-3">
           <span className="rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[11px] font-bold text-primary uppercase">
             Zawodnik {index + 1} / {total}
@@ -735,7 +752,6 @@ function TinderCard({
           </span>
         </div>
 
-        {/* PROFIL ZAWODNIKA */}
         <div className="my-auto flex flex-col items-center text-center">
           <div className="relative size-24 sm:size-28">
             <div className="grid size-full place-items-center rounded-full border-4 border-foreground bg-muted font-heading text-4xl shadow-[3px_3px_0_0_var(--foreground)] overflow-hidden">
@@ -768,7 +784,6 @@ function TinderCard({
           </div>
         </div>
 
-        {/* DOLNY STATUS */}
         <div className="border-t border-border/80 pt-2.5 text-center text-[11px] text-muted-foreground">
           {currentMark ? (
             <p className="text-foreground">
@@ -783,9 +798,6 @@ function TinderCard({
   );
 }
 
-/**
- * PODSUMOWANIE JEDNOSTKI Z PEŁNYM WEB SHARE I KOPIOWANIEM LINKU
- */
 function Summary({
   trainingId,
   players,
@@ -795,6 +807,7 @@ function Summary({
   initialSurveyEnabled,
   onEdit,
   onReset,
+  onSurveyActivated,
 }: {
   trainingId: string;
   players: EvaluationPlayer[];
@@ -804,6 +817,7 @@ function Summary({
   initialSurveyEnabled?: boolean;
   onEdit: (index: number) => void;
   onReset: () => void;
+  onSurveyActivated: () => void;
 }) {
   const [surveyLoading, setSurveyLoading] = useState(false);
   const [surveyLink, setSurveyLink] = useState<string | null>(null);
@@ -811,10 +825,8 @@ function Summary({
   const [canShare, setCanShare] = useState(false);
 
   useEffect(() => {
-    // Sprawdzenie czy przeglądarka obsługuje natywne dzielenie (smartfony)
     setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function");
 
-    // Jeśli ankieta była już aktywowana w bazie, ustaw link od razu
     if (initialSurveyEnabled) {
       setSurveyLink(`${window.location.origin}/ankieta/${trainingId}`);
     }
@@ -833,7 +845,6 @@ function Summary({
     { minus: 0, zero: 0, plus: 0, absent: 0, missing: 0 }
   );
 
-  // Natywne udostępnianie na telefonie
   async function triggerNativeShare(url: string) {
     if (typeof navigator !== "undefined" && navigator.share) {
       try {
@@ -850,7 +861,6 @@ function Summary({
     await copyToClipboard(url);
   }
 
-  // Bezpośrednie kopiowanie do schowka
   async function copyToClipboard(url: string) {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       try {
@@ -863,7 +873,6 @@ function Summary({
     }
   }
 
-  // Pierwsze kliknięcie aktywujące
   async function handleEnableAndShare() {
     setSurveyLoading(true);
     const res = await enableTrainingSurveyAction(trainingId);
@@ -872,6 +881,7 @@ function Summary({
       const fullUrl = `${window.location.origin}${res.surveyUrl}`;
       setSurveyLink(fullUrl);
       setSurveyLoading(false);
+      onSurveyActivated();
 
       if (canShare) {
         await triggerNativeShare(fullUrl);
@@ -892,7 +902,6 @@ function Summary({
         Nieobecności i zgłoszone kontuzje zostały wyłączone ze sportowego bilansu formy zespołu.
       </p>
 
-      {/* STATYSTYKI OCEN */}
       <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-lg border-2 border-minus/40 bg-minus/10 p-3">
           <dt className="text-[11px] font-semibold text-minus uppercase">Słabiej (−)</dt>
@@ -912,7 +921,6 @@ function Summary({
         </div>
       </dl>
 
-      {/* ANKIETA POTRENINGOWA RPE: ZAAWANSOWANE UDOSTĘPNIANIE */}
       <div className="mt-5 rounded-2xl border-2 border-primary/30 bg-primary/5 p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -930,9 +938,7 @@ function Summary({
 
         {surveyLink ? (
           <div className="mt-4 space-y-3">
-            {/* PRZYCISKI AKCJI UDOSTĘPNIANIA */}
             <div className="flex flex-col sm:flex-row gap-2.5">
-              {/* Opcja 1: Natywne udostępnianie na telefonie (WhatsApp, SMS itp.) */}
               {canShare && (
                 <button
                   type="button"
@@ -944,7 +950,6 @@ function Summary({
                 </button>
               )}
 
-              {/* Opcja 2: Kopiowanie do schowka */}
               <button
                 type="button"
                 onClick={() => copyToClipboard(surveyLink)}
@@ -961,7 +966,6 @@ function Summary({
               </button>
             </div>
 
-            {/* Podgląd linku z możliwością zaznaczenia */}
             <div className="flex items-center gap-2 rounded-xl border-2 border-foreground/15 bg-background p-2">
               <input
                 type="text"
@@ -985,7 +989,6 @@ function Summary({
         )}
       </div>
 
-      {/* LISTA ZAWODNIKÓW */}
       <ul className="mt-4 divide-y divide-border rounded-lg border-2 border-foreground/20 bg-card">
         {players.map((p, playerIndex) => {
           const mark = marks[p.id];
@@ -1027,7 +1030,6 @@ function Summary({
         })}
       </ul>
 
-      {/* PRZYCISKI KOŃCOWE */}
       <div className="mt-6 flex flex-wrap items-center gap-3">
         {isOwner && (
           <Button
