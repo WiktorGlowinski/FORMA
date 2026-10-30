@@ -38,7 +38,7 @@ export interface SurveyStatusItem {
 }
 
 /**
- * 1. Pobiera listę jednostek treningowych i zespołów z oznaczeniem autora jednostki
+ * 1. Pobiera listę jednostek treningowych i zespołów (zoptymalizowane równolegle)
  */
 export async function getCoachTrainingsAction() {
   try {
@@ -49,65 +49,75 @@ export async function getCoachTrainingsAction() {
       return { success: false, error: "Brak aktywnej sesji użytkownika.", trainings: [], teams: [] };
     }
 
-    const { data: teams, error: teamsErr } = await supabase
-      .from("teams")
-      .select("id, name")
-      .order("name");
+    // Faza 1: Równoległe pobranie zespołów oraz ostatnich jednostek treningowych
+    const [teamsRes, trainingsRes] = await Promise.all([
+      supabase
+        .from("teams")
+        .select("id, name")
+        .order("name"),
+      supabase
+        .from("trainings")
+        .select(`
+          id,
+          team_id,
+          lead_coach_id,
+          date,
+          start_time,
+          end_time,
+          location,
+          topic,
+          main_goal,
+          training_type,
+          organizational_note,
+          status,
+          teams ( id, name ),
+          lead_coach:profiles!trainings_lead_coach_id_fkey ( full_name )
+        `)
+        .order("date", { ascending: false })
+        .limit(40), // Zabezpieczenie przed pobieraniem tysięcy rekordów historycznych
+    ]);
 
-    if (teamsErr) throw teamsErr;
+    if (teamsRes.error) throw teamsRes.error;
+    if (trainingsRes.error) throw trainingsRes.error;
 
-    const { data: trainings, error: trErr } = await supabase
-      .from("trainings")
-      .select(`
-        id,
-        team_id,
-        lead_coach_id,
-        date,
-        start_time,
-        end_time,
-        location,
-        topic,
-        main_goal,
-        training_type,
-        organizational_note,
-        status,
-        teams ( id, name ),
-        lead_coach:profiles!trainings_lead_coach_id_fkey ( full_name )
-      `)
-      .order("date", { ascending: false });
+    const teams = teamsRes.data || [];
+    const trainings = trainingsRes.data || [];
 
-    if (trErr) throw trErr;
+    const trainingIds = trainings.map((t: any) => t.id);
+    const teamIds = teams.map((t: any) => t.id);
 
-    const trainingIds = (trainings || []).map((t: any) => t.id);
+    // Faza 2: Równoległe pobranie liczby ocen i liczebności kadr w jednym zapytaniu
+    const [evalsRes, squadRes] = await Promise.all([
+      trainingIds.length > 0
+        ? supabase
+            .from("evaluations")
+            .select("training_id")
+            .in("training_id", trainingIds)
+        : Promise.resolve({ data: [], error: null }),
+      teamIds.length > 0
+        ? supabase
+            .from("players")
+            .select("current_team_id")
+            .in("current_team_id", teamIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
 
-    let evalsByTraining: Record<string, number> = {};
-    if (trainingIds.length > 0) {
-      const { data: evals } = await supabase
-        .from("evaluations")
-        .select("training_id")
-        .in("training_id", trainingIds);
+    if (evalsRes.error) throw evalsRes.error;
+    if (squadRes.error) throw squadRes.error;
 
-      (evals || []).forEach((e: any) => {
-        evalsByTraining[e.training_id] = (evalsByTraining[e.training_id] || 0) + 1;
-      });
-    }
+    const evalsByTraining: Record<string, number> = {};
+    (evalsRes.data || []).forEach((e: any) => {
+      evalsByTraining[e.training_id] = (evalsByTraining[e.training_id] || 0) + 1;
+    });
 
-    const teamIds = (teams || []).map((t: any) => t.id);
-    let playersCountByTeam: Record<string, number> = {};
-    if (teamIds.length > 0) {
-      const { data: squad } = await supabase
-        .from("players")
-        .select("current_team_id")
-        .in("current_team_id", teamIds);
+    const playersCountByTeam: Record<string, number> = {};
+    (squadRes.data || []).forEach((p: any) => {
+      if (p.current_team_id) {
+        playersCountByTeam[p.current_team_id] = (playersCountByTeam[p.current_team_id] || 0) + 1;
+      }
+    });
 
-      (squad || []).forEach((p: any) => {
-        if (p.current_team_id) {
-          playersCountByTeam[p.current_team_id] = (playersCountByTeam[p.current_team_id] || 0) + 1;
-        }
-      });
-    }
-
-    const formattedTrainings: DbTrainingCard[] = (trainings || []).map((t: any) => {
+    const formattedTrainings: DbTrainingCard[] = trainings.map((t: any) => {
       const tId = t.team_id;
       const teamObj = Array.isArray(t.teams) ? t.teams[0] : t.teams;
       const coachProfile = Array.isArray(t.lead_coach) ? t.lead_coach[0] : t.lead_coach;
@@ -139,7 +149,7 @@ export async function getCoachTrainingsAction() {
     return {
       success: true,
       trainings: formattedTrainings,
-      teams: (teams || []).map((t: any) => ({ id: t.id, name: t.name })),
+      teams: teams.map((t: any) => ({ id: t.id, name: t.name })),
     };
   } catch (err: any) {
     return { success: false, error: err.message, trainings: [], teams: [] };
@@ -209,7 +219,7 @@ export async function createTrainingAction(payload: {
 }
 
 /**
- * 3. Pobiera dane pojedynczej jednostki, kadrę oraz status ankiety
+ * 3. Pobiera dane pojedynczej jednostki, kadrę oraz status ocen (zoptymalizowane równolegle)
  */
 export async function getTrainingEvaluationDataAction(trainingId: string) {
   try {
@@ -242,32 +252,38 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       return { success: false, error: "Nie znaleziono jednostki lub brak do niej uprawnień." };
     }
 
-    // Bezpieczny odczyt nazwiska trenera prowadzącego przez supabaseAdmin
-    let leadCoachName = "Trener prowadzący";
-    if (training.lead_coach_id) {
-      const { data: coachProfile } = await supabaseAdmin
-        .from("profiles")
-        .select("full_name")
-        .eq("id", training.lead_coach_id)
-        .maybeSingle();
+    // Równoległe pobranie profilu trenera, listy zawodników i istniejących ocen
+    const [coachProfileRes, playersRes, evalsRes] = await Promise.all([
+      training.lead_coach_id
+        ? supabaseAdmin
+            .from("profiles")
+            .select("full_name")
+            .eq("id", training.lead_coach_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      supabase
+        .from("players")
+        .select("id, first_name, last_name, jersey_number, avatar_url, parent_name, parent_phone, phone")
+        .eq("current_team_id", training.team_id)
+        .order("jersey_number", { ascending: true, nullsFirst: false }),
+      supabase
+        .from("evaluations")
+        .select("player_id, score, is_present, absence_reason, comment")
+        .eq("training_id", trainingId),
+    ]);
 
-      if (coachProfile?.full_name) {
-        leadCoachName = coachProfile.full_name;
-      }
+    if (playersRes.error) throw playersRes.error;
+    if (evalsRes.error) throw evalsRes.error;
+
+    let leadCoachName = "Trener prowadzący";
+    if (coachProfileRes.data?.full_name) {
+      leadCoachName = coachProfileRes.data.full_name;
     }
 
     const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
     const teamObj = Array.isArray(training.teams) ? training.teams[0] : training.teams;
 
-    const { data: rawPlayers, error: plErr } = await supabase
-      .from("players")
-      .select("id, first_name, last_name, jersey_number, avatar_url, parent_name, parent_phone, phone")
-      .eq("current_team_id", training.team_id)
-      .order("jersey_number", { ascending: true, nullsFirst: false });
-
-    if (plErr) throw plErr;
-
-    const squad = (rawPlayers || []).map((p: any) => ({
+    const squad = (playersRes.data || []).map((p: any) => ({
       id: p.id,
       firstName: p.first_name,
       lastName: p.last_name,
@@ -279,15 +295,8 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       phone: p.phone || null,
     }));
 
-    const { data: rawEvals, error: evErr } = await supabase
-      .from("evaluations")
-      .select("player_id, score, is_present, absence_reason, comment")
-      .eq("training_id", trainingId);
-
-    if (evErr) throw evErr;
-
     const initialMarks: Record<string, Mark> = {};
-    (rawEvals || []).forEach((row: any) => {
+    (evalsRes.data || []).forEach((row: any) => {
       if (!row.is_present) {
         initialMarks[row.player_id] = {
           type: "absence",
@@ -433,7 +442,6 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     if (trErr || !training) return { success: false, error: "Trening nie istnieje lub brak dostępu." };
 
-    // Jeśli ankieta była już aktywowana, od razu zwróć adres
     if (training.survey_enabled) {
       return {
         success: true,
@@ -441,7 +449,6 @@ export async function enableTrainingSurveyAction(trainingId: string) {
       };
     }
 
-    // Pozwól aktywować ankietę twórcy jednostki LUB trenerowi przypisanemu do tej drużyny
     const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
     if (!isOwner) {
       const { data: assignment } = await supabase
