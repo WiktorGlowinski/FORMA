@@ -34,9 +34,10 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
-  // Weryfikacja sesji TYLKO dla chronionych tras (/trener, /admin itp.)
+  // Weryfikacja sesji TYLKO dla chronionych tras
   const { data: { user } } = await supabase.auth.getUser();
 
+  // Przekierowanie do logowania w przypadku braku sesji na chronionej trasie
   if (!user) {
     return NextResponse.redirect(new URL('/login', request.url));
   }

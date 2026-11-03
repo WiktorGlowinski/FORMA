@@ -27,7 +27,7 @@ export default function LoginPage() {
         return;
       }
 
-      // Dynamiczne przekierowanie: Admin trafia do /admin, Trener do /trener
+      // Przekierowanie zależy od roli przypisanej do profilu użytkownika.
       router.push(result.redirectTo || "/trener");
       router.refresh();
     });
