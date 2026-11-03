@@ -25,13 +25,13 @@ export default async function AdminPlayersPage() {
     name: t.name,
   }));
 
-  // Spłaszczenie relacji Supabase: jeśli teams przyszło jako tablica [ { id, name } ], bierzemy pierwszy element
   const players = (playersRes.players || []).map((p: any) => ({
     id: p.id,
     first_name: p.first_name,
     last_name: p.last_name,
     jersey_number: p.jersey_number ?? null,
     birth_year: p.birth_year,
+    avatar_url: p.avatar_url ?? null, // <-- przekazanie zdjęcia z bazy
     parent_name: p.parent_name ?? null,
     parent_phone: p.parent_phone ?? null,
     is_active: Boolean(p.is_active),

@@ -204,7 +204,6 @@ export async function updateCoachAction(payload: {
     const phone = payload.phone?.trim() || null;
     const avatarUrl = payload.avatarUrl?.trim() || null;
 
-    // 1. Aktualizacja w Supabase Auth (hasło, email lub metadane)
     const authUpdatePayload: any = {
       email,
       user_metadata: { full_name: fullName, avatar_url: avatarUrl },
@@ -223,7 +222,6 @@ export async function updateCoachAction(payload: {
       return { success: false, error: `Błąd Supabase Auth: ${authErr.message}` };
     }
 
-    // 2. Aktualizacja w public.profiles
     const { error: profileErr } = await supabaseAdmin
       .from("profiles")
       .update({
@@ -258,7 +256,6 @@ export async function deleteCoachAction(coachId: string) {
   try {
     const { clubId } = await requireAdmin();
 
-    // Weryfikacja czy trener należy do tego klubu
     const { data: coach } = await supabaseAdmin
       .from("profiles")
       .select("id, club_id")
@@ -270,17 +267,14 @@ export async function deleteCoachAction(coachId: string) {
       return { success: false, error: "Nie znaleziono trenera w kadrze Twojego klubu." };
     }
 
-    // 1. Usunięcie przypisań sztabowych
     await supabaseAdmin
       .from("team_coaches")
       .delete()
       .eq("coach_id", coachId);
 
-    // 2. Usunięcie z modułu uwierzytelniania Supabase Auth (kaskada usunie profil)
     const { error: authDeleteErr } = await supabaseAdmin.auth.admin.deleteUser(coachId);
 
     if (authDeleteErr) {
-      // Fallback: usunięcie ręczne z tabeli profiles, jeśli rekord w Auth był już usunięty
       await supabaseAdmin.from("profiles").delete().eq("id", coachId);
     }
 
@@ -294,9 +288,8 @@ export async function deleteCoachAction(coachId: string) {
   }
 }
 
-
 /**
- * 1. Pomocnik rejestrujący zdarzenie audytowe w bazie
+ * Pomocnik rejestrujący zdarzenie audytowe w bazie
  */
 export async function logAuditEvent(payload: {
   clubId: string;
@@ -324,7 +317,7 @@ export async function logAuditEvent(payload: {
 }
 
 /**
- * 2. Pobieranie ostatnich wpisów audytowych dla klubu
+ * Pobieranie ostatnich wpisów audytowych dla klubu
  */
 export async function getClubAuditLogsAction(limit = 100) {
   try {
@@ -367,7 +360,35 @@ export async function getClubAuditLogsAction(limit = 100) {
   }
 }
 
+/**
+ * Jednolita aktualizacja adresu logo / herbu klubu w bazie (z obsługą usuwania null)
+ */
+export async function updateClubLogoAction(logoUrl: string | null) {
+  try {
+    const { clubId } = await requireAdmin();
+    const supabase = await createClient();
 
+    const finalLogoUrl = logoUrl && logoUrl.trim().length > 0 ? logoUrl.trim() : null;
+
+    const { error } = await supabase
+      .from("clubs")
+      .update({
+        logo_url: finalLogoUrl,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", clubId);
+
+    if (error) throw error;
+
+    revalidatePath("/admin/seasons");
+    revalidatePath("/admin/sezony");
+    revalidatePath("/admin");
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Błąd podczas zapisu herbu." };
+  }
+}
 
 /**
  * Bezpieczne tworzenie trenera w auth.users, profiles i opcjonalnie team_coaches
@@ -391,7 +412,6 @@ export async function createCoachAccountAction(payload: {
       return { success: false, error: "Hasło musi mieć co najmniej 6 znaków." };
     }
 
-    // 1. Rejestracja w module Supabase Auth
     const { data: authUser, error: authErr } = await supabaseAdmin.auth.admin.createUser({
       email,
       password: payload.password,
@@ -408,7 +428,6 @@ export async function createCoachAccountAction(payload: {
 
     const coachId = authUser.user.id;
 
-    // 2. Utworzenie profilu w profiles z danymi kontaktowymi i zdjęciem
     const { error: profileErr } = await supabaseAdmin
       .from("profiles")
       .insert({
@@ -428,6 +447,7 @@ export async function createCoachAccountAction(payload: {
     }
 
     revalidatePath("/admin/druzyny");
+    revalidatePath("/admin/sztab");
     revalidatePath("/admin");
 
     return { 
@@ -503,7 +523,7 @@ export async function removeCoachFromTeamAction(teamId: string, coachId: string)
 }
 
 /**
- * 3. Kartoteka zawodników
+ * 3. Kartoteka zawodników z obsługą avatar_url
  */
 export async function getAdminPlayersAction() {
   try {
@@ -519,6 +539,7 @@ export async function getAdminPlayersAction() {
         jersey_number,
         birth_year,
         birth_date,
+        avatar_url,
         phone,
         email,
         parent_name,
@@ -545,6 +566,7 @@ export async function createPlayerAction(payload: {
   jerseyNumber: number | null;
   birthYear: number;
   birthDate?: string;
+  avatarUrl?: string;
   currentTeamId: string | null;
   phone?: string;
   email?: string;
@@ -583,6 +605,7 @@ export async function createPlayerAction(payload: {
         jersey_number: payload.jerseyNumber,
         birth_year: payload.birthYear,
         birth_date: payload.birthDate || null,
+        avatar_url: payload.avatarUrl?.trim() || null,
         phone: payload.phone?.trim() || null,
         email: payload.email?.trim().toLowerCase() || null,
         parent_name: payload.parentName?.trim() || null,
@@ -596,7 +619,6 @@ export async function createPlayerAction(payload: {
 
     if (playerErr || !player) throw playerErr;
 
-    // Zapis w player_team_history
     if (payload.currentTeamId) {
       await supabaseAdmin
         .from("player_team_history")
@@ -616,6 +638,60 @@ export async function createPlayerAction(payload: {
   }
 }
 
+export async function updatePlayerAction(payload: {
+  playerId: string;
+  firstName: string;
+  lastName: string;
+  jerseyNumber: number | null;
+  birthYear: number;
+  birthDate?: string;
+  avatarUrl?: string;
+  currentTeamId: string | null;
+  phone?: string;
+  email?: string;
+  parentName?: string;
+  parentPhone?: string;
+  parentEmail?: string;
+  isActive?: boolean;
+}) {
+  try {
+    const { clubId } = await requireAdmin();
+    const currentYear = new Date().getFullYear();
+    const isJunior = (currentYear - payload.birthYear) < 18;
+
+    const { error } = await supabaseAdmin
+      .from("players")
+      .update({
+        current_team_id: payload.currentTeamId || null,
+        first_name: payload.firstName.trim(),
+        last_name: payload.lastName.trim(),
+        jersey_number: payload.jerseyNumber,
+        birth_year: payload.birthYear,
+        birth_date: payload.birthDate || null,
+        avatar_url: payload.avatarUrl?.trim() || null,
+        phone: payload.phone?.trim() || null,
+        email: payload.email?.trim().toLowerCase() || null,
+        parent_name: payload.parentName?.trim() || null,
+        parent_phone: payload.parentPhone?.trim() || null,
+        parent_email: payload.parentEmail?.trim().toLowerCase() || null,
+        preferred_survey_recipient: isJunior ? "parent" : "player",
+        is_active: payload.isActive !== undefined ? payload.isActive : true,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", payload.playerId)
+      .eq("club_id", clubId);
+
+    if (error) throw error;
+
+    revalidatePath("/admin/zawodnicy");
+    revalidatePath("/admin/druzyny");
+    revalidatePath("/admin");
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
 export interface CsvPlayerRecord {
   firstName: string;
   lastName: string;
@@ -626,6 +702,7 @@ export interface CsvPlayerRecord {
   parentName?: string;
   parentPhone?: string;
   parentEmail?: string;
+  avatarUrl?: string;
 }
 
 export async function bulkImportPlayersAction(
@@ -650,6 +727,7 @@ export async function bulkImportPlayersAction(
         last_name: p.lastName.trim(),
         jersey_number: p.jerseyNumber,
         birth_year: p.birthYear,
+        avatar_url: p.avatarUrl?.trim() || null,
         phone: p.phone?.trim() || null,
         email: p.email?.trim().toLowerCase() || null,
         parent_name: p.parentName?.trim() || null,
@@ -667,7 +745,6 @@ export async function bulkImportPlayersAction(
 
     if (error) throw error;
 
-    // Automatyczne wypełnienie player_team_history
     if (teamId && insertedPlayers && insertedPlayers.length > 0) {
       const historyRows = insertedPlayers.map((p) => ({
         club_id: clubId,
@@ -735,8 +812,33 @@ export async function createAndActivateSeasonAction(payload: {
     if (error) throw error;
 
     revalidatePath("/admin");
+    revalidatePath("/admin/seasons");
     revalidatePath("/admin/sezony");
     return { success: true, seasonId: data.id };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+/**
+ * Szybka aktualizacja zdjęcia / awatara zawodnika
+ */
+export async function updatePlayerAvatarAction(playerId: string, avatarUrl: string | null) {
+  try {
+    const { clubId } = await requireAdmin();
+
+    const { error } = await supabaseAdmin
+      .from("players")
+      .update({
+        avatar_url: avatarUrl && avatarUrl.trim().length > 0 ? avatarUrl.trim() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", playerId)
+      .eq("club_id", clubId);
+
+    if (error) throw error;
+
+    revalidatePath("/admin/zawodnicy");
+    return { success: true };
   } catch (err: any) {
     return { success: false, error: err.message };
   }
@@ -758,26 +860,8 @@ export async function setCurrentSeasonAction(seasonId: string) {
     if (error) throw error;
 
     revalidatePath("/admin");
+    revalidatePath("/admin/seasons");
     revalidatePath("/admin/sezony");
-    return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
-  }
-}
-
-export async function updateClubLogoAction(logoUrl: string) {
-  try {
-    const { clubId } = await requireAdmin();
-    const supabase = await createClient();
-
-    const { error } = await supabase
-      .from("clubs")
-      .update({ logo_url: logoUrl })
-      .eq("id", clubId);
-
-    if (error) throw error;
-
-    revalidatePath("/admin");
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err.message };

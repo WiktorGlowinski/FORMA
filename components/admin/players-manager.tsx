@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { 
   Users, 
   UserPlus, 
@@ -9,10 +9,18 @@ import {
   Phone, 
   Mail, 
   X, 
-  ShieldAlert 
+  ShieldAlert,
+  Camera,
+  Upload,
+  Loader2,
+  Trash2,
+  User,
+  CheckCircle2
 } from "lucide-react";
-import { createPlayerAction } from "@/app/actions/admin";
+import { createPlayerAction, updatePlayerAvatarAction } from "@/app/actions/admin";
+import { uploadImageAction } from "@/app/actions/upload";
 import { CsvImporterModal } from "@/components/admin/csv-importer";
+import { cn } from "@/lib/utils";
 
 interface PlayerItem {
   id: string;
@@ -21,6 +29,7 @@ interface PlayerItem {
   jersey_number: number | null;
   birth_year: number;
   birth_date?: string | null;
+  avatar_url?: string | null;
   phone?: string | null;
   email?: string | null;
   parent_name: string | null;
@@ -69,7 +78,7 @@ export function PlayersManager({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Bezpieczne stany formularza jako stringi
+  // Stany formularza tworzenia nowego zawodnika
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [jerseyNumber, setJerseyNumber] = useState("");
@@ -77,6 +86,9 @@ export function PlayersManager({
   const [birthMonth, setBirthMonth] = useState("01");
   const [birthDay, setBirthDay] = useState("");
   const [teamId, setTeamId] = useState<string>(teams[0]?.id || "");
+  const [avatarUrl, setAvatarUrl] = useState<string>("");
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const addModalFileRef = useRef<HTMLInputElement>(null);
   
   // Dane kontaktowe gracza
   const [phone, setPhone] = useState("");
@@ -86,6 +98,11 @@ export function PlayersManager({
   const [parentName, setParentName] = useState("");
   const [parentPhone, setParentPhone] = useState("");
   const [parentEmail, setParentEmail] = useState("");
+
+  // Stan modalu bezpośredniej edycji zdjęcia konkretnego zawodnika
+  const [avatarModalPlayer, setAvatarModalPlayer] = useState<PlayerItem | null>(null);
+  const [isDirectUploading, setIsDirectUploading] = useState(false);
+  const directFileInputRef = useRef<HTMLInputElement>(null);
 
   const numericBirthYear = parseInt(birthYear, 10) || currentYear;
   const isJunior = (currentYear - numericBirthYear) < 18;
@@ -100,6 +117,27 @@ export function PlayersManager({
     return matchesTeam && matchesSearch;
   });
 
+  // Upload zdjęcia w formularzu ręcznego dodawania
+  async function handleAddModalAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingAvatar(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("bucket", "avatars");
+    formData.append("folder", "players");
+
+    const res = await uploadImageAction(formData);
+    if (res.success && res.url) {
+      setAvatarUrl(res.url);
+    } else {
+      alert(res.error || "Nie udało się przesłać zdjęcia.");
+    }
+    setUploadingAvatar(false);
+  }
+
+  // Zapis ręcznie tworzonego gracza
   async function handleCreatePlayer(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg(null);
@@ -118,6 +156,7 @@ export function PlayersManager({
       jerseyNumber: parsedJersey,
       birthYear: parsedYear,
       birthDate: constructedBirthDate,
+      avatarUrl: avatarUrl.trim() || undefined,
       currentTeamId: teamId || null,
       phone: phone.trim() || undefined,
       email: email.trim().toLowerCase() || undefined,
@@ -136,6 +175,7 @@ export function PlayersManager({
           jersey_number: parsedJersey,
           birth_year: parsedYear,
           birth_date: constructedBirthDate,
+          avatar_url: avatarUrl.trim() || null,
           phone: phone.trim() || null,
           email: email.trim().toLowerCase() || null,
           parent_name: parentName.trim() || null,
@@ -153,6 +193,7 @@ export function PlayersManager({
       setLastName("");
       setJerseyNumber("");
       setBirthDay("");
+      setAvatarUrl("");
       setPhone("");
       setEmail("");
       setParentName("");
@@ -163,6 +204,70 @@ export function PlayersManager({
       setErrorMsg(res.error || "Wystąpił błąd podczas dodawania zawodnika.");
     }
     setIsSubmitting(false);
+  }
+
+  // Bezpośredni upload zdjęcia dla klikniętego zawodnika
+  async function handleDirectAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !avatarModalPlayer) return;
+
+    setIsDirectUploading(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("bucket", "avatars");
+    formData.append("folder", "players");
+
+    const uploadRes = await uploadImageAction(formData);
+
+    if (uploadRes.success && uploadRes.url) {
+      const saveRes = await updatePlayerAvatarAction(avatarModalPlayer.id, uploadRes.url);
+
+      if (saveRes.success) {
+        setPlayers((prev) =>
+          prev.map((p) =>
+            p.id === avatarModalPlayer.id ? { ...p, avatar_url: uploadRes.url } : p
+          )
+        );
+        setAvatarModalPlayer((prev) =>
+          prev ? { ...prev, avatar_url: uploadRes.url } : null
+        );
+      } else {
+        alert(saveRes.error || "Nie udało się zapisać zdjęcia w bazie.");
+      }
+    } else {
+      alert(uploadRes.error || "Błąd podczas wgrywania pliku.");
+    }
+
+    if (directFileInputRef.current) {
+      directFileInputRef.current.value = "";
+    }
+    setIsDirectUploading(false);
+  }
+
+  // Usunięcie zdjęcia klikniętego zawodnika
+  async function handleRemoveDirectAvatar() {
+    if (!avatarModalPlayer || !avatarModalPlayer.avatar_url) return;
+    if (!window.confirm(`Czy na pewno chcesz usunąć zdjęcie zawodnika ${avatarModalPlayer.first_name} ${avatarModalPlayer.last_name}?`)) {
+      return;
+    }
+
+    setIsDirectUploading(true);
+    const res = await updatePlayerAvatarAction(avatarModalPlayer.id, null);
+
+    if (res.success) {
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === avatarModalPlayer.id ? { ...p, avatar_url: null } : p
+        )
+      );
+      setAvatarModalPlayer((prev) =>
+        prev ? { ...prev, avatar_url: null } : null
+      );
+    } else {
+      alert(res.error || "Błąd podczas usuwania zdjęcia.");
+    }
+    setIsDirectUploading(false);
   }
 
   function formatBirthDateDisplay(year: number, dateStr?: string | null) {
@@ -179,6 +284,15 @@ export function PlayersManager({
 
   return (
     <div className="space-y-6 pb-16">
+      {/* UKRYTE WEJŚCIE DLA BEZPOŚREDNIEGO UPLOADU ZDJĘCIA */}
+      <input
+        ref={directFileInputRef}
+        type="file"
+        accept="image/png, image/jpeg, image/webp"
+        onChange={handleDirectAvatarUpload}
+        className="hidden"
+      />
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b-2 border-foreground/15 pb-6">
         <div>
           <p className="text-xs font-bold tracking-[0.16em] text-primary uppercase">
@@ -188,7 +302,7 @@ export function PlayersManager({
             Kartoteka Graczy
           </h1>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
-            Baza zawodników, numery na koszulkach, kontakty do opiekunów oraz adresy e-mail do ankiet.
+            Baza zawodników, zdjęcia profilowe, numery na koszulkach oraz kontakty do opiekunów.
           </p>
         </div>
 
@@ -245,14 +359,14 @@ export function PlayersManager({
         </div>
       </div>
 
-      {/* TABELA */}
+      {/* TABELA ZAWODNIKÓW */}
       <div className="rounded-2xl border-2 border-foreground/20 bg-card overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left font-mono text-xs">
             <thead className="border-b-2 border-foreground/15 bg-muted/60 text-[11px] uppercase tracking-wider text-muted-foreground">
               <tr>
                 <th className="p-4 w-16">Nr</th>
-                <th className="p-4">Zawodnik</th>
+                <th className="p-4">Zawodnik (Kliknij, aby wgrać zdjęcie)</th>
                 <th className="p-4">Urodzenie</th>
                 <th className="p-4">Drużyna</th>
                 <th className="p-4">Dane Kontaktowe</th>
@@ -275,12 +389,45 @@ export function PlayersManager({
                         {player.jersey_number ? `#${player.jersey_number}` : "—"}
                       </td>
                       <td className="p-4">
-                        <span className="font-heading text-base uppercase text-foreground block">
-                          {player.last_name} {player.first_name}
-                        </span>
-                        <span className="font-mono text-[10px] text-muted-foreground">
-                          {playerIsJunior ? "Junior" : "Senior"}
-                        </span>
+                        <div className="flex items-center gap-3">
+                          {/* Interaktywny awatar z dymkiem aparatu */}
+                          <button
+                            type="button"
+                            onClick={() => setAvatarModalPlayer(player)}
+                            className="group/avatar relative size-10 rounded-full border-2 border-foreground/20 bg-muted overflow-hidden flex items-center justify-center shrink-0 hover:border-primary transition-all shadow-xs cursor-pointer"
+                            title="Kliknij, aby wgrać lub zmienić zdjęcie"
+                          >
+                            {player.avatar_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={player.avatar_url}
+                                alt={`${player.first_name} ${player.last_name}`}
+                                className="size-full object-cover group-hover/avatar:opacity-60 transition-opacity"
+                              />
+                            ) : (
+                              <span className="font-heading text-xs font-bold text-muted-foreground group-hover/avatar:hidden">
+                                {player.first_name[0]}{player.last_name[0]}
+                              </span>
+                            )}
+                            <div className="absolute inset-0 bg-background/80 flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity">
+                              <Camera className="size-4 text-primary" />
+                            </div>
+                          </button>
+
+                          {/* Klikalne nazwisko otwierające edycję zdjęcia */}
+                          <div>
+                            <button
+                              type="button"
+                              onClick={() => setAvatarModalPlayer(player)}
+                              className="font-heading text-base uppercase text-foreground hover:text-primary transition-colors text-left block leading-tight hover:underline underline-offset-2 cursor-pointer"
+                            >
+                              {player.last_name} {player.first_name}
+                            </button>
+                            <span className="font-mono text-[10px] text-muted-foreground">
+                              {playerIsJunior ? "Junior" : "Senior"}
+                            </span>
+                          </div>
+                        </div>
                       </td>
                       <td className="p-4 font-semibold text-muted-foreground">
                         {formatBirthDateDisplay(player.birth_year, player.birth_date)}
@@ -371,7 +518,106 @@ export function PlayersManager({
         </div>
       </div>
 
-      {/* MODAL NOWEGO ZAWODNIKA */}
+      {/* MODAL BEZPOŚREDNIEJ EDYCJI ZDJĘCIA GRACZA (PO KLIKNIĘCIU NA GRACZA) */}
+      {avatarModalPlayer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-full max-w-sm rounded-2xl border-2 border-foreground bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)] space-y-5 text-center">
+            <div className="flex items-center justify-between border-b pb-3">
+              <span className="font-mono text-xs font-bold uppercase text-primary">Zdjęcie zawodnika</span>
+              <button 
+                type="button" 
+                onClick={() => setAvatarModalPlayer(null)} 
+                className="rounded-full border p-1 hover:bg-muted"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* Podgląd awatara */}
+            <div className="space-y-3">
+              <div 
+                onClick={() => !isDirectUploading && directFileInputRef.current?.click()}
+                className="group relative size-28 mx-auto rounded-full border-4 border-dashed border-foreground/30 bg-muted flex items-center justify-center cursor-pointer hover:border-foreground overflow-hidden transition shadow-sm"
+                title="Kliknij, aby wybrać plik"
+              >
+                {avatarModalPlayer.avatar_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={avatarModalPlayer.avatar_url}
+                    alt="Awatar"
+                    className="size-full object-cover group-hover:opacity-75 transition-opacity"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-muted-foreground">
+                    <Camera className="size-8 stroke-[1.5]" />
+                    <span className="font-mono text-[9px] uppercase font-bold mt-1">Wybierz</span>
+                  </div>
+                )}
+
+                {isDirectUploading && (
+                  <div className="absolute inset-0 bg-background/80 flex items-center justify-center">
+                    <Loader2 className="size-7 text-primary animate-spin" />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <h4 className="font-heading text-xl uppercase tracking-tight">
+                  {avatarModalPlayer.last_name} {avatarModalPlayer.first_name}
+                </h4>
+                <p className="font-mono text-xs text-muted-foreground mt-0.5">
+                  {avatarModalPlayer.jersey_number ? `#${avatarModalPlayer.jersey_number} · ` : ""}
+                  {avatarModalPlayer.teams?.name || "Brak drużyny"}
+                </p>
+              </div>
+            </div>
+
+            {/* Przyciski akcji */}
+            <div className="pt-2 border-t border-border space-y-2">
+              <button
+                type="button"
+                disabled={isDirectUploading}
+                onClick={() => directFileInputRef.current?.click()}
+                className="w-full h-11 inline-flex items-center justify-center gap-2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] active:scale-95 transition disabled:opacity-50"
+              >
+                {isDirectUploading ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    <span>Zapisywanie...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="size-4" />
+                    <span>{avatarModalPlayer.avatar_url ? "Zmień zdjęcie" : "Wgraj zdjęcie"}</span>
+                  </>
+                )}
+              </button>
+
+              {avatarModalPlayer.avatar_url && (
+                <button
+                  type="button"
+                  disabled={isDirectUploading}
+                  onClick={handleRemoveDirectAvatar}
+                  className="w-full h-10 inline-flex items-center justify-center gap-1.5 rounded-xl border border-destructive/30 bg-destructive/10 text-destructive font-heading text-xs uppercase font-bold hover:bg-destructive/20 active:scale-95 transition disabled:opacity-50"
+                >
+                  <Trash2 className="size-3.5" />
+                  <span>Usuń bieżące zdjęcie</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setAvatarModalPlayer(null)}
+                className="w-full h-10 rounded-xl border border-foreground/20 font-heading text-xs uppercase hover:bg-muted transition"
+              >
+                Zamknij
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL TWORZENIA NOWEGO ZAWODNIKA */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
           <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border-2 border-foreground bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)] space-y-4">
@@ -390,6 +636,59 @@ export function PlayersManager({
             )}
 
             <form onSubmit={handleCreatePlayer} className="space-y-4">
+              {/* Wgrywanie zdjęcia przy ręcznym tworzeniu */}
+              <div className="flex items-center gap-4 rounded-xl border border-foreground/15 bg-background p-3">
+                <div 
+                  onClick={() => addModalFileRef.current?.click()}
+                  className="relative size-16 rounded-full border-2 border-dashed border-foreground/30 bg-muted/40 flex items-center justify-center overflow-hidden cursor-pointer hover:border-foreground shrink-0 transition"
+                >
+                  {avatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatarUrl} alt="Awatar" className="size-full object-cover" />
+                  ) : (
+                    <User className="size-7 text-muted-foreground" />
+                  )}
+
+                  {uploadingAvatar && (
+                    <div className="absolute inset-0 bg-background/80 flex items-center justify-center">
+                      <Loader2 className="size-5 text-primary animate-spin" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <input
+                    ref={addModalFileRef}
+                    type="file"
+                    accept="image/png, image/jpeg, image/webp"
+                    onChange={handleAddModalAvatarUpload}
+                    className="hidden"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={uploadingAvatar}
+                      onClick={() => addModalFileRef.current?.click()}
+                      className="h-8 px-2.5 rounded-lg border border-foreground/20 bg-card font-heading text-xs uppercase font-bold hover:bg-muted transition"
+                    >
+                      {avatarUrl ? "Zmień zdjęcie" : "Wgraj zdjęcie"}
+                    </button>
+                    {avatarUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setAvatarUrl("")}
+                        className="h-8 px-2 rounded-lg border border-destructive/30 text-destructive text-xs hover:bg-destructive/10"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="font-mono text-[10px] text-muted-foreground">
+                    Opcjonalne zdjęcie profilowe do kartoteki.
+                  </p>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1">Imię</label>
@@ -481,7 +780,6 @@ export function PlayersManager({
                 </div>
               </div>
 
-              {/* Sekcja kontaktów dopasowana do wieku */}
               {isJunior ? (
                 <div className="rounded-xl border-2 border-primary/20 bg-primary/5 p-4 space-y-3">
                   <span className="font-mono text-xs font-bold uppercase text-primary block">
@@ -527,7 +825,7 @@ export function PlayersManager({
 
                   <div className="border-t border-primary/20 pt-2.5 space-y-2">
                     <span className="font-mono text-[10px] font-bold uppercase text-muted-foreground block">
-                      Dane bezpośrednie juniora (opcjonalnie, jeśli posiada):
+                      Dane bezpośrednie juniora (opcjonalnie):
                     </span>
                     <div className="grid grid-cols-2 gap-2">
                       <input
@@ -601,6 +899,7 @@ export function PlayersManager({
         </div>
       )}
 
+      {/* MODAL CSV */}
       {isCsvModalOpen && (
         <CsvImporterModal
           teams={teams}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { 
   Users, 
   UserPlus, 
@@ -9,13 +9,13 @@ import {
   Crown, 
   Lock, 
   User, 
-  ImageIcon, 
   X, 
   Search,
   Edit2,
   Trash2,
-  ShieldCheck,
-  CheckCircle2,
+  Camera,
+  Upload,
+  Loader2,
   AlertTriangle
 } from "lucide-react";
 import { 
@@ -23,6 +23,7 @@ import {
   updateCoachAction, 
   deleteCoachAction 
 } from "@/app/actions/admin";
+import { uploadImageAction } from "@/app/actions/upload";
 
 interface AssignedTeamInfo {
   id: string;
@@ -63,6 +64,8 @@ export function CoachesManager({
   const [createPhone, setCreatePhone] = useState("");
   const [createPassword, setCreatePassword] = useState("");
   const [createAvatar, setCreateAvatar] = useState("");
+  const [isUploadingCreateAvatar, setIsUploadingCreateAvatar] = useState(false);
+  const createFileRef = useRef<HTMLInputElement>(null);
 
   // Formularz edycji
   const [editName, setEditName] = useState("");
@@ -71,6 +74,8 @@ export function CoachesManager({
   const [editPassword, setEditPassword] = useState("");
   const [editAvatar, setEditAvatar] = useState("");
   const [editIsActive, setEditIsActive] = useState(true);
+  const [isUploadingEditAvatar, setIsUploadingEditAvatar] = useState(false);
+  const editFileRef = useRef<HTMLInputElement>(null);
 
   const filteredCoaches = coaches.filter((c) => {
     const q = searchQuery.toLowerCase();
@@ -93,7 +98,47 @@ export function CoachesManager({
     setErrorMsg(null);
   }
 
-  // Zapis utworzenia
+  // Upload zdjęcia w formularzu tworzenia
+  async function handleCreateAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingCreateAvatar(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("bucket", "avatars");
+    formData.append("folder", "coaches");
+
+    const res = await uploadImageAction(formData);
+    if (res.success && res.url) {
+      setCreateAvatar(res.url);
+    } else {
+      alert(res.error || "Nie udało się wgrać zdjęcia trenera.");
+    }
+    setIsUploadingCreateAvatar(false);
+  }
+
+  // Upload zdjęcia w formularzu edycji
+  async function handleEditAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingEditAvatar(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("bucket", "avatars");
+    formData.append("folder", "coaches");
+
+    const res = await uploadImageAction(formData);
+    if (res.success && res.url) {
+      setEditAvatar(res.url);
+    } else {
+      alert(res.error || "Nie udało się wgrać zdjęcia trenera.");
+    }
+    setIsUploadingEditAvatar(false);
+  }
+
+  // Zapis utworzenia trenera
   async function handleCreateSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorMsg(null);
@@ -133,7 +178,7 @@ export function CoachesManager({
     setIsSubmitting(false);
   }
 
-  // Zapis edycji
+  // Zapis edycji trenera
   async function handleEditSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!editingCoach) return;
@@ -201,7 +246,7 @@ export function CoachesManager({
             Sztab Trenerski
           </h1>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
-            Baza zarejestrowanych szkoleniowców, hasła dostępowe, edycja danych i usuwanie kont.
+            Baza zarejestrowanych szkoleniowców, zdjęcia profilowe, edycja danych i uprawnienia.
           </p>
         </div>
 
@@ -245,17 +290,26 @@ export function CoachesManager({
               <div className="space-y-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3 min-w-0">
-                    {coach.avatarUrl ? (
-                      <img
-                        src={coach.avatarUrl}
-                        alt={coach.fullName}
-                        className="size-12 rounded-xl border border-foreground/20 object-cover shrink-0"
-                      />
-                    ) : (
-                      <div className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-foreground/20 bg-muted text-primary">
-                        <Users className="size-6" />
+                    {/* Klikalny awatar otwierający edycję */}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(coach)}
+                      className="group/avatar relative size-12 rounded-xl border border-foreground/20 bg-muted overflow-hidden flex items-center justify-center shrink-0 hover:border-primary transition-all cursor-pointer"
+                      title="Kliknij, aby zmienić zdjęcie lub edytować trenera"
+                    >
+                      {coach.avatarUrl ? (
+                        <img
+                          src={coach.avatarUrl}
+                          alt={coach.fullName}
+                          className="size-full object-cover group-hover/avatar:opacity-60 transition-opacity"
+                        />
+                      ) : (
+                        <Users className="size-6 text-primary group-hover/avatar:hidden" />
+                      )}
+                      <div className="absolute inset-0 bg-background/80 flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity">
+                        <Camera className="size-4 text-primary" />
                       </div>
-                    )}
+                    </button>
 
                     <div className="min-w-0">
                       <h3 className="font-heading text-xl uppercase tracking-tight truncate">
@@ -321,7 +375,7 @@ export function CoachesManager({
                 </div>
               </div>
 
-              {/* Dolne przyciski akcji: Edycja i Usuwanie */}
+              {/* Dolne przyciski akcji */}
               <div className="border-t border-border/80 pt-3 flex items-center justify-end gap-2">
                 <button
                   type="button"
@@ -375,6 +429,59 @@ export function CoachesManager({
             )}
 
             <form onSubmit={handleCreateSubmit} className="space-y-3.5">
+              {/* UPLOAD ZDJĘCIA TRENERA */}
+              <div className="flex items-center gap-4 rounded-xl border border-foreground/15 bg-background p-3">
+                <div 
+                  onClick={() => !isUploadingCreateAvatar && createFileRef.current?.click()}
+                  className="relative size-16 rounded-xl border-2 border-dashed border-foreground/30 bg-muted/40 flex items-center justify-center overflow-hidden cursor-pointer hover:border-foreground shrink-0 transition"
+                  title="Wybierz plik z dysku"
+                >
+                  {createAvatar ? (
+                    <img src={createAvatar} alt="Awatar" className="size-full object-cover" />
+                  ) : (
+                    <User className="size-7 text-muted-foreground" />
+                  )}
+
+                  {isUploadingCreateAvatar && (
+                    <div className="absolute inset-0 bg-background/80 flex items-center justify-center">
+                      <Loader2 className="size-5 text-primary animate-spin" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1 min-w-0">
+                  <input
+                    ref={createFileRef}
+                    type="file"
+                    accept="image/png, image/jpeg, image/webp"
+                    onChange={handleCreateAvatarUpload}
+                    className="hidden"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isUploadingCreateAvatar}
+                      onClick={() => createFileRef.current?.click()}
+                      className="h-8 px-2.5 rounded-lg border border-foreground/20 bg-card font-heading text-xs uppercase font-bold hover:bg-muted transition"
+                    >
+                      {createAvatar ? "Zmień zdjęcie" : "Wgraj zdjęcie"}
+                    </button>
+                    {createAvatar && (
+                      <button
+                        type="button"
+                        onClick={() => setCreateAvatar("")}
+                        className="h-8 px-2 rounded-lg border border-destructive/30 text-destructive text-xs hover:bg-destructive/10"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="font-mono text-[10px] text-muted-foreground">
+                    Zdjęcie profilowe trenera (PNG, JPG, WEBP).
+                  </p>
+                </div>
+              </div>
+
               <div>
                 <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1">
                   Imię i nazwisko szkoleniowca
@@ -444,22 +551,6 @@ export function CoachesManager({
                 </div>
               </div>
 
-              <div>
-                <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1">
-                  URL zdjęcia (Awatara — opcjonalnie)
-                </label>
-                <div className="relative flex items-center">
-                  <ImageIcon className="absolute left-3.5 size-4 text-muted-foreground" />
-                  <input
-                    type="url"
-                    placeholder="https://..."
-                    value={createAvatar}
-                    onChange={(e) => setCreateAvatar(e.target.value)}
-                    className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background pl-10 pr-3 font-mono text-xs outline-none focus:border-foreground"
-                  />
-                </div>
-              </div>
-
               <div className="pt-2 flex gap-2">
                 <button
                   type="button"
@@ -470,7 +561,7 @@ export function CoachesManager({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isUploadingCreateAvatar}
                   className="h-11 w-1/2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50"
                 >
                   {isSubmitting ? "Tworzenie..." : "Zarejestruj trenera"}
@@ -481,7 +572,7 @@ export function CoachesManager({
         </div>
       )}
 
-      {/* MODAL 2: EDYCJA TRENERA I RESET HASŁA */}
+      {/* MODAL 2: EDYCJA TRENERA I JEGO ZDJĘCIA */}
       {editingCoach && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
           <div className="w-full max-w-md rounded-2xl border-2 border-foreground bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)] space-y-4">
@@ -510,6 +601,59 @@ export function CoachesManager({
             )}
 
             <form onSubmit={handleEditSubmit} className="space-y-3.5">
+              {/* UPLOAD ZDJĘCIA W EDYCJI */}
+              <div className="flex items-center gap-4 rounded-xl border border-foreground/15 bg-background p-3">
+                <div 
+                  onClick={() => !isUploadingEditAvatar && editFileRef.current?.click()}
+                  className="relative size-16 rounded-xl border-2 border-dashed border-foreground/30 bg-muted/40 flex items-center justify-center overflow-hidden cursor-pointer hover:border-foreground shrink-0 transition"
+                  title="Wybierz plik z dysku"
+                >
+                  {editAvatar ? (
+                    <img src={editAvatar} alt="Awatar" className="size-full object-cover" />
+                  ) : (
+                    <User className="size-7 text-muted-foreground" />
+                  )}
+
+                  {isUploadingEditAvatar && (
+                    <div className="absolute inset-0 bg-background/80 flex items-center justify-center">
+                      <Loader2 className="size-5 text-primary animate-spin" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1 min-w-0">
+                  <input
+                    ref={editFileRef}
+                    type="file"
+                    accept="image/png, image/jpeg, image/webp"
+                    onChange={handleEditAvatarUpload}
+                    className="hidden"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isUploadingEditAvatar}
+                      onClick={() => editFileRef.current?.click()}
+                      className="h-8 px-2.5 rounded-lg border border-foreground/20 bg-card font-heading text-xs uppercase font-bold hover:bg-muted transition"
+                    >
+                      {editAvatar ? "Zmień zdjęcie" : "Wgraj zdjęcie"}
+                    </button>
+                    {editAvatar && (
+                      <button
+                        type="button"
+                        onClick={() => setEditAvatar("")}
+                        className="h-8 px-2 rounded-lg border border-destructive/30 text-destructive text-xs hover:bg-destructive/10"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="font-mono text-[10px] text-muted-foreground">
+                    Aktualny awatar szkoleniowca.
+                  </p>
+                </div>
+              </div>
+
               <div>
                 <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1">
                   Imię i nazwisko
@@ -575,21 +719,6 @@ export function CoachesManager({
                 </div>
               </div>
 
-              <div>
-                <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1">
-                  URL zdjęcia profilowego
-                </label>
-                <div className="relative flex items-center">
-                  <ImageIcon className="absolute left-3.5 size-4 text-muted-foreground" />
-                  <input
-                    type="url"
-                    value={editAvatar}
-                    onChange={(e) => setEditAvatar(e.target.value)}
-                    className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background pl-10 pr-3 font-mono text-xs outline-none focus:border-foreground"
-                  />
-                </div>
-              </div>
-
               {/* Status aktywności */}
               <label className="flex items-center gap-2.5 rounded-xl border border-foreground/15 p-3 cursor-pointer">
                 <input
@@ -613,7 +742,7 @@ export function CoachesManager({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isUploadingEditAvatar}
                   className="h-11 w-1/2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50"
                 >
                   {isSubmitting ? "Zapisuję..." : "Zapisz zmiany"}

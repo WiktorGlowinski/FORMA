@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { 
   Calendar, 
   Plus, 
@@ -8,7 +8,9 @@ import {
   CheckCircle2, 
   Archive, 
   Clock, 
-  Image as ImageIcon, 
+  Upload, 
+  Trash2, 
+  Loader2, 
   X, 
   AlertCircle 
 } from "lucide-react";
@@ -17,6 +19,7 @@ import {
   setCurrentSeasonAction, 
   updateClubLogoAction 
 } from "@/app/actions/admin";
+import { uploadImageAction } from "@/app/actions/upload";
 import { cn } from "@/lib/utils";
 
 interface SeasonItem {
@@ -38,9 +41,9 @@ export function SeasonsManager({
 }) {
   const [seasons, setSeasons] = useState<SeasonItem[]>(initialSeasons);
   const [logoUrl, setLogoUrl] = useState<string>(initialLogoUrl || "");
-  const [logoInput, setLogoInput] = useState<string>(initialLogoUrl || "");
-  const [isUpdatingLogo, setIsUpdatingLogo] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [logoSuccessMsg, setLogoSuccessMsg] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Modal nowego sezonu
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -98,28 +101,73 @@ export function SeasonsManager({
     setSwitchingId(null);
   }
 
-  // Zapis herbu klubu
-  async function handleUpdateLogo(e: React.FormEvent) {
-    e.preventDefault();
-    setIsUpdatingLogo(true);
+  // Bezpośredni upload herbu do Supabase Storage
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingLogo(true);
     setLogoSuccessMsg(false);
 
-    const res = await updateClubLogoAction(logoInput.trim());
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("bucket", "club-assets");
+    formData.append("folder", "logos");
+
+    const uploadRes = await uploadImageAction(formData);
+
+    if (uploadRes.success && uploadRes.url) {
+      const saveRes = await updateClubLogoAction(uploadRes.url);
+
+      if (saveRes.success) {
+        setLogoUrl(uploadRes.url);
+        setLogoSuccessMsg(true);
+        setTimeout(() => setLogoSuccessMsg(false), 3500);
+      } else {
+        alert(saveRes.error || "Plik wgrany, ale nie udało się zaktualizować bazy.");
+      }
+    } else {
+      alert(uploadRes.error || "Wystąpił błąd podczas wgrywania pliku.");
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    setIsUploadingLogo(false);
+  }
+
+  // Usunięcie herbu
+  async function handleRemoveLogo() {
+    if (!window.confirm("Czy na pewno chcesz usunąć herb klubu?")) return;
+
+    setIsUploadingLogo(true);
+    const res = await updateClubLogoAction("");
 
     if (res.success) {
-      setLogoUrl(logoInput.trim());
-      setLogoSuccessMsg(true);
-      setTimeout(() => setLogoSuccessMsg(false), 3000);
+      setLogoUrl("");
+      setLogoSuccessMsg(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     } else {
-      alert(res.error || "Nie udało się zaktualizować logo klubu.");
+      alert(res.error || "Błąd podczas usuwania herbu.");
     }
-    setIsUpdatingLogo(false);
+    setIsUploadingLogo(false);
   }
 
   const currentSeason = seasons.find((s) => s.is_current);
 
   return (
     <div className="space-y-8 pb-16">
+      {/* UKRYTY INPUT PLIKU DO OBSŁUGI BUCKETA */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png, image/jpeg, image/webp, image/svg+xml"
+        onChange={handleLogoUpload}
+        className="hidden"
+      />
+
       {/* NAGŁÓWEK MODUŁU */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b-2 border-foreground/15 pb-6">
         <div>
@@ -218,7 +266,7 @@ export function SeasonsManager({
           )}
         </div>
 
-        {/* PRAWA STRONA: HERB I IDENTYFIKACJA KLUBU (5/12) */}
+        {/* PRAWA STRONA: HERB I IDENTYFIKACJA KLUBU Z BUCKETEM STORAGE (5/12) */}
         <div className="lg:col-span-5 space-y-4">
           <div className="px-1">
             <span className="font-mono text-xs font-bold uppercase tracking-wider text-muted-foreground">
@@ -228,16 +276,30 @@ export function SeasonsManager({
 
           <div className="rounded-2xl border-2 border-foreground/20 bg-card p-5 sm:p-6 shadow-sm space-y-5">
             <div className="flex items-center gap-4">
-              <div className="relative flex size-20 shrink-0 items-center justify-center rounded-2xl border-2 border-foreground/20 bg-background overflow-hidden shadow-[2px_2px_0_0_var(--foreground)]">
+              {/* Klikalny kontener herbu (otwiera wybór pliku) */}
+              <div 
+                onClick={() => !isUploadingLogo && fileInputRef.current?.click()}
+                className="group relative flex size-24 shrink-0 cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-foreground/30 bg-muted/40 transition hover:border-foreground hover:bg-muted overflow-hidden shadow-[2px_2px_0_0_var(--foreground)]"
+              >
                 {logoUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={logoUrl}
                     alt={`Herb ${clubName}`}
-                    className="size-full object-contain p-2"
+                    className="size-full object-contain p-2 group-hover:scale-105 transition-transform"
                   />
                 ) : (
-                  <Shield className="size-8 text-muted-foreground" />
+                  <Shield className="size-8 text-muted-foreground group-hover:text-foreground transition-colors" />
+                )}
+
+                {isUploadingLogo ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-xs">
+                    <Loader2 className="size-6 text-primary animate-spin" />
+                  </div>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="font-mono text-[10px] font-bold text-background uppercase">Zmień</span>
+                  </div>
                 )}
               </div>
 
@@ -249,43 +311,54 @@ export function SeasonsManager({
                   {clubName}
                 </h3>
                 <p className="font-mono text-xs text-muted-foreground mt-0.5">
-                  Widoczny w nagłówkach raportów i podsumowań.
+                  Widoczny w nagłówkach raportów i podsumowań sztabu.
                 </p>
               </div>
             </div>
 
-            <form onSubmit={handleUpdateLogo} className="space-y-3.5 pt-2 border-t border-border">
-              <div>
-                <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1.5">
-                  Adres URL do pliku logo (PNG, SVG, JPG)
-                </label>
-                <div className="relative flex items-center">
-                  <ImageIcon className="absolute left-3.5 size-4 text-muted-foreground" />
-                  <input
-                    type="url"
-                    placeholder="https://domena.pl/logo-klubu.png"
-                    value={logoInput}
-                    onChange={(e) => setLogoInput(e.target.value)}
-                    className="h-11 w-full rounded-xl border-2 border-foreground/15 bg-background pl-10 pr-3 font-mono text-xs outline-none focus:border-foreground"
-                  />
-                </div>
+            {logoSuccessMsg && (
+              <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 text-xs font-mono text-primary flex items-center gap-2 animate-in fade-in">
+                <CheckCircle2 className="size-4 shrink-0" />
+                <span>Herb klubu został pomyślnie zaktualizowany!</span>
               </div>
+            )}
 
-              {logoSuccessMsg && (
-                <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 text-xs font-mono text-primary flex items-center gap-2">
-                  <CheckCircle2 className="size-4 shrink-0" />
-                  <span>Herb został pomyślnie zaktualizowany!</span>
-                </div>
-              )}
-
+            <div className="pt-2 border-t border-border flex items-center gap-2.5">
               <button
-                type="submit"
-                disabled={isUpdatingLogo || logoInput === logoUrl}
-                className="w-full h-11 inline-flex items-center justify-center rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] transition-all active:scale-95 disabled:opacity-40"
+                type="button"
+                disabled={isUploadingLogo}
+                onClick={() => fileInputRef.current?.click()}
+                className="flex-1 h-11 inline-flex items-center justify-center gap-2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] transition-all active:scale-95 disabled:opacity-50"
               >
-                {isUpdatingLogo ? "Zapisywanie..." : "Zapisz herb klubu"}
+                {isUploadingLogo ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    <span>Wgrywanie...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="size-4" />
+                    <span>{logoUrl ? "Zmień plik herbu" : "Wgraj herb z dysku"}</span>
+                  </>
+                )}
               </button>
-            </form>
+
+              {logoUrl && (
+                <button
+                  type="button"
+                  disabled={isUploadingLogo}
+                  onClick={handleRemoveLogo}
+                  title="Usuń herb"
+                  className="size-11 inline-flex items-center justify-center rounded-xl border-2 border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 active:scale-95 transition-all shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50 shrink-0"
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              )}
+            </div>
+
+            <p className="font-mono text-[10px] text-muted-foreground text-center">
+              Obsługiwane formaty: PNG, SVG, JPG lub WEBP (do 4.5 MB).
+            </p>
           </div>
         </div>
       </div>
