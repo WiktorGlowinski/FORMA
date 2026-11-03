@@ -1,5 +1,5 @@
 PROPRIETARY SOURCE CODE LICENSE
-Copyright (c) 2026 Wiktor Głowiński & Jan Mickiewicz. Wszelkie prawa zastrzeżone.
+Copyright (c) 2026 Wiktor Głowiński & Jan Mickiewicz & Mateusz Boniewicz. Wszelkie prawa zastrzeżone.
 
 Niniejsze oprogramowanie (Platforma FORMA) wraz z powiązaną dokumentacją, 
 architekturą bazy danych oraz elementami interfejsu użytkownika stanowi 
