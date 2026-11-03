@@ -286,12 +286,12 @@ export function PlayersManager({
     <div className="space-y-6 pb-16">
       {/* UKRYTE WEJŚCIE DLA BEZPOŚREDNIEGO UPLOADU ZDJĘCIA */}
       <input
-        ref={directFileInputRef}
-        type="file"
-        accept="image/png, image/jpeg, image/webp"
-        onChange={handleDirectAvatarUpload}
-        className="hidden"
-      />
+  ref={directFileInputRef}
+  type="file"
+  accept="image/*, .png, .jpg, .jpeg, .webp, .svg"
+  onChange={handleDirectAvatarUpload}
+  className="hidden"
+/>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b-2 border-foreground/15 pb-6">
         <div>
@@ -657,13 +657,13 @@ export function PlayersManager({
                 </div>
 
                 <div className="space-y-1">
-                  <input
-                    ref={addModalFileRef}
-                    type="file"
-                    accept="image/png, image/jpeg, image/webp"
-                    onChange={handleAddModalAvatarUpload}
-                    className="hidden"
-                  />
+                 <input
+  ref={addModalFileRef}
+  type="file"
+  accept="image/*, .png, .jpg, .jpeg, .webp, .svg"
+  onChange={handleAddModalAvatarUpload}
+  className="hidden"
+/>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"

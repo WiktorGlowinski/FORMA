@@ -451,12 +451,12 @@ export function CoachesManager({
 
                 <div className="space-y-1 min-w-0">
                   <input
-                    ref={createFileRef}
-                    type="file"
-                    accept="image/png, image/jpeg, image/webp"
-                    onChange={handleCreateAvatarUpload}
-                    className="hidden"
-                  />
+  ref={createFileRef}
+  type="file"
+  accept="image/*, .png, .jpg, .jpeg, .webp, .svg"
+  onChange={handleCreateAvatarUpload}
+  className="hidden"
+/>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -623,12 +623,12 @@ export function CoachesManager({
 
                 <div className="space-y-1 min-w-0">
                   <input
-                    ref={editFileRef}
-                    type="file"
-                    accept="image/png, image/jpeg, image/webp"
-                    onChange={handleEditAvatarUpload}
-                    className="hidden"
-                  />
+  ref={editFileRef}
+  type="file"
+  accept="image/*, .png, .jpg, .jpeg, .webp, .svg"
+  onChange={handleEditAvatarUpload}
+  className="hidden"
+/>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"

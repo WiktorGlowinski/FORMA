@@ -161,12 +161,12 @@ export function SeasonsManager({
     <div className="space-y-8 pb-16">
       {/* UKRYTY INPUT PLIKU DO OBSŁUGI BUCKETA */}
       <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/png, image/jpeg, image/webp, image/svg+xml"
-        onChange={handleLogoUpload}
-        className="hidden"
-      />
+  ref={fileInputRef}
+  type="file"
+  accept="image/*, .png, .jpg, .jpeg, .webp, .svg"
+  onChange={handleLogoUpload}
+  className="hidden"
+/>
 
       {/* NAGŁÓWEK MODUŁU */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b-2 border-foreground/15 pb-6">
