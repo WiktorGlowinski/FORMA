@@ -36,11 +36,11 @@ export async function loginAction(formData: FormData) {
     role = profile?.role;
   }
 
-  // Przekierowanie zależne od roli
+// Przekierowanie zależne od roli
   let redirectTo = '/trener';
-  if (role === 'club_admin' || role === 'admin') {
+  if (role === 'club_admin' || role === 'admin' || role === 'master_admin') {
     redirectTo = '/admin';
-  } else if (role === 'coordinator' || role === 'analyst') {
+  } else if (role === 'coordinator' || role === 'koordynator' || role === 'analyst') {
     redirectTo = '/koordynator';
   }
 
