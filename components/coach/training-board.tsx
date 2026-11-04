@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useCoachStore } from "@/store/useCoachStore";
 import Link from "next/link";
 import {
   Plus,
@@ -24,14 +23,19 @@ import {
   CheckCircle2,
   AlertCircle,
   Filter,
+  Ban,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { formatTrainingDate } from "@/components/coach/data";
 import {
   getCoachTrainingsAction,
   createTrainingAction,
+  cancelTrainingAction,
+  getCoachAlertsAction,
   type DbTrainingCard,
+  type CoachAlertItem,
 } from "@/app/actions/coach";
+import { useCoachStore } from "@/store/useCoachStore";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -68,6 +72,23 @@ const MONTH_NAMES = [
   "Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec",
   "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"
 ];
+
+const QUICK_CANCEL_REASONS = [
+  "Niekorzystne warunki atmosferyczne",
+  "Niedostępność boiska / hali",
+  "Zdarzenie losowe / powody sztabu",
+  "Przełożony mecz kontrolny",
+];
+
+function formatGuestBadge(count: number): string {
+  if (count === 1) return "+1 gość";
+  const lastDigit = count % 10;
+  const lastTwo = count % 100;
+  if (lastDigit >= 2 && lastDigit <= 4 && (lastTwo < 12 || lastTwo > 14)) {
+    return `+${count} goście`;
+  }
+  return `+${count} gości`;
+}
 
 function shiftDateByDays(dateStr: string, days: number): string {
   const base = dateStr || new Date().toISOString().split("T")[0];
@@ -106,10 +127,8 @@ function canEvaluateTraining(t: DbTrainingCard): boolean {
     const now = new Date();
     const todayStr = now.toISOString().split("T")[0];
 
-    // Data minęła (wczoraj lub dawniej)
     if (t.date < todayStr) return true;
 
-    // Trening odbywa się dzisiaj – odblokuj, jeśli minęła godzina rozpoczęcia
     if (t.date === todayStr) {
       if (!t.startTime) return true;
       const [h, m] = t.startTime.split(":").map(Number);
@@ -133,6 +152,9 @@ export function TrainingBoard() {
 
   const trainings = cachedTrainings || [];
   const teams = cachedTeams || [];
+
+  const [alerts, setAlerts] = useState<CoachAlertItem[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
 
   const [loading, setLoading] = useState(!cachedTrainings);
   const [error, setError] = useState<string | null>(null);
@@ -162,29 +184,43 @@ export function TrainingBoard() {
   const [mainGoal, setMainGoal] = useState("");
   const [orgNote, setOrgNote] = useState("");
 
+  const [cancellingTraining, setCancellingTraining] = useState<DbTrainingCard | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [isCancellingSubmitting, setIsCancellingSubmitting] = useState(false);
+
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
 
   async function loadData(force = false) {
     if (cachedTrainings && cachedTeams && !force) {
       setLoading(false);
-      return;
     }
 
     setLoading(true);
-    const res = await getCoachTrainingsAction();
-    if (!res.success) {
-      setError(res.error || "Nie udało się załadować jednostek.");
+    setAlertsLoading(true);
+
+    const [resTrainings, resAlerts] = await Promise.all([
+      getCoachTrainingsAction(),
+      getCoachAlertsAction(),
+    ]);
+
+    if (!resTrainings.success) {
+      setError(resTrainings.error || "Nie udało się załadować jednostek.");
     } else {
-      if (currentCoachId && currentCoachId !== res.currentCoachId) {
+      if (currentCoachId && currentCoachId !== resTrainings.currentCoachId) {
         invalidateCache();
       }
 
-      setTrainingsData(res.currentCoachId, res.trainings, res.teams);
-      if (res.teams.length > 0 && !teamId) {
-        setTeamId(res.teams[0].id);
+      setTrainingsData(resTrainings.currentCoachId, resTrainings.trainings, resTrainings.teams);
+      if (resTrainings.teams.length > 0 && !teamId) {
+        setTeamId(resTrainings.teams[0].id);
       }
     }
+
+    if (resAlerts.success) {
+      setAlerts(resAlerts.alerts || []);
+    }
+    setAlertsLoading(false);
     setLoading(false);
   }
 
@@ -263,6 +299,22 @@ export function TrainingBoard() {
     setSubmitting(false);
   }
 
+  async function handleConfirmCancel() {
+    if (!cancellingTraining) return;
+
+    setIsCancellingSubmitting(true);
+    const res = await cancelTrainingAction(cancellingTraining.id, cancelReason);
+
+    if (res.success) {
+      setCancellingTraining(null);
+      setCancelReason("");
+      await loadData(true);
+    } else {
+      alert(res.error || "Nie udało się odwołać jednostki.");
+    }
+    setIsCancellingSubmitting(false);
+  }
+
   function handleTouchStart(e: React.TouchEvent) {
     touchStartX.current = e.touches[0].clientX;
     touchStartY.current = e.touches[0].clientY;
@@ -292,25 +344,26 @@ export function TrainingBoard() {
   const isFullyEvaluated = (t: DbTrainingCard) =>
     t.status === "completed" && t.evaluatedCount >= t.totalPlayers && t.totalPlayers > 0;
 
+  const isCancelled = (t: DbTrainingCard) => t.status === "cancelled";
+
   const filteredTrainings = trainings.filter((t) => {
     if (selectedTeamId !== "all" && t.teamId !== selectedTeamId) {
       return false;
     }
     if (activeTab === "pending") {
-      return !isFullyEvaluated(t);
+      return !isCancelled(t) && !isFullyEvaluated(t);
     }
     if (activeTab === "history") {
-      return isFullyEvaluated(t);
+      return isFullyEvaluated(t) || isCancelled(t);
     }
     return true;
   });
 
-  const pendingCount = trainings.filter((t) => !isFullyEvaluated(t)).length;
-  const historyCount = trainings.filter((t) => isFullyEvaluated(t)).length;
+  const pendingCount = trainings.filter((t) => !isCancelled(t) && !isFullyEvaluated(t)).length;
+  const historyCount = trainings.filter((t) => isFullyEvaluated(t) || isCancelled(t)).length;
 
   return (
     <div className="mx-auto max-w-2xl pb-16">
-      {/* NAGŁÓWEK TABLICY */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-bold tracking-[0.16em] text-primary uppercase">
@@ -336,7 +389,82 @@ export function TrainingBoard() {
         Po treningu przechodzisz skład nazwisko po nazwisku. Wystawione oceny tworzą historię rozwoju zawodnika.
       </p>
 
-      {/* CZYTELNY PASEK KONTROLNY: ZAKŁADKI I FILTR DRUŻYN */}
+      {/* SEKCJA: WYMAGAJĄ UWAGI */}
+      <div className="mt-6 rounded-2xl border-2 border-foreground/20 bg-card p-4 shadow-sm">
+        <div className="flex items-center justify-between border-b border-border/80 pb-2.5">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="size-4 text-amber-600" />
+            <span className="font-heading text-xs font-bold uppercase tracking-wider">
+              Wymagają uwagi (Sygnały do rozmowy)
+            </span>
+            {alerts.length > 0 && (
+              <span className="rounded-full bg-destructive/15 px-2 py-0.5 font-mono text-[10px] font-bold text-destructive">
+                {alerts.length}
+              </span>
+            )}
+          </div>
+          <Link
+            href="/trener/zawodnicy"
+            className="text-[11px] font-bold text-primary hover:underline"
+          >
+            Pełna kadra zespołu →
+          </Link>
+        </div>
+
+        <div className="mt-3">
+          {alertsLoading ? (
+            <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+              <div className="size-3 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <span>Weryfikacja wskaźników obciążenia i formy...</span>
+            </div>
+          ) : alerts.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {alerts.map((alert) => (
+                <Link
+                  key={`${alert.playerId}-${alert.type}`}
+                  href={`/trener/zawodnicy/${alert.playerId}`}
+                  className={cn(
+                    "group flex items-center gap-2.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-all active:scale-95",
+                    alert.severity === "danger"
+                      ? "border-rose-500/30 bg-rose-500/10 hover:border-rose-500/60"
+                      : "border-amber-500/30 bg-amber-500/10 hover:border-amber-500/60"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "font-bold",
+                      alert.severity === "danger"
+                        ? "text-rose-950 dark:text-rose-200"
+                        : "text-amber-950 dark:text-amber-200"
+                    )}
+                  >
+                    {alert.jerseyNumber ? `#${alert.jerseyNumber} ` : ""}
+                    {alert.playerName}
+                  </span>
+
+                  <span
+                    className={cn(
+                      "rounded px-1.5 py-0.5 font-mono text-[10px] font-bold",
+                      alert.severity === "danger"
+                        ? "bg-rose-200/80 text-rose-900 dark:bg-rose-900/80 dark:text-rose-100"
+                        : "bg-amber-200/80 text-amber-900 dark:bg-amber-900/80 dark:text-amber-100"
+                    )}
+                  >
+                    {alert.badgeText}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+              <CheckCircle2 className="size-4 text-emerald-600" />
+              <span>Wszystkie wskaźniki zespołu w normie. Brak sygnałów do pilnej interwencji.</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* PASEK ZAKŁADEK I FILTRÓW */}
       <div className="mt-6 space-y-3 rounded-2xl border-2 border-foreground/20 bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/80 pb-3">
           <div className="flex items-center gap-1.5">
@@ -421,7 +549,7 @@ export function TrainingBoard() {
         )}
       </div>
 
-      {/* LISTA KAFELKÓW TRENINGOWYCH */}
+      {/* LISTA TRENINGÓW */}
       {loading ? (
         <div className="mt-6 space-y-4 animate-pulse">
           {[1, 2, 3].map((i) => (
@@ -453,13 +581,14 @@ export function TrainingBoard() {
           <p className="font-heading text-xl text-foreground uppercase">Brak jednostek w wybranym widoku</p>
           <p className="text-xs mt-1 max-w-sm mx-auto">
             {activeTab === "pending"
-              ? "Wszystkie jednostki zostały ocenione i przeniesione do historii."
-              : "Brak zakończonych jednostek spełniających wybrane kryteria."}
+              ? "Wszystkie jednostki zostały ocenione lub odwołane."
+              : "Brak minionych jednostek spełniających wybrane kryteria."}
           </p>
         </div>
       ) : (
         <ul className="mt-6 space-y-4">
           {filteredTrainings.map((t) => {
+            const cancelled = isCancelled(t);
             const canOpen = canEvaluateTraining(t);
             const completed = isFullyEvaluated(t);
             const inProgress = canOpen && t.evaluatedCount > 0 && !completed;
@@ -467,10 +596,19 @@ export function TrainingBoard() {
             return (
               <li
                 key={t.id}
-                className="print-card overflow-hidden rounded-2xl border-2 border-foreground/20 bg-card shadow-sm hover:border-foreground/35 transition-all"
+                className={cn(
+                  "print-card overflow-hidden rounded-2xl border-2 bg-card shadow-sm transition-all",
+                  cancelled
+                    ? "border-foreground/10 opacity-70"
+                    : "border-foreground/20 hover:border-foreground/35"
+                )}
               >
-                {/* Pasek nagłówka */}
-                <div className="mow-stripes flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-chalk">
+                <div
+                  className={cn(
+                    "flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-chalk",
+                    cancelled ? "bg-stone-700/80" : "mow-stripes"
+                  )}
+                >
                   <div className="flex items-center gap-2">
                     <p className="text-xs font-semibold capitalize tracking-wide">
                       {formatTrainingDate(t.date)}
@@ -488,11 +626,17 @@ export function TrainingBoard() {
                   </p>
                 </div>
 
-                {/* Środek karty */}
                 <div className="p-4 sm:p-5 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 pb-3">
                     <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+                      <span
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider font-mono",
+                          cancelled
+                            ? "bg-destructive/15 text-destructive"
+                            : "bg-muted text-foreground"
+                        )}
+                      >
                         {STATUS_LABEL[t.status]}
                       </span>
                       <span className="text-xs text-muted-foreground">·</span>
@@ -502,21 +646,42 @@ export function TrainingBoard() {
                       </span>
                     </div>
 
-                    {t.isOwner ? (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-600/30 font-mono text-[10px] font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">
-                        <UserCheck className="size-3" />
-                        <span>Twój trening</span>
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-stone-100 border border-stone-300 font-mono text-[10px] font-bold text-stone-700 dark:bg-stone-800 dark:border-stone-700 dark:text-stone-300">
-                        <Lock className="size-3 text-stone-500" />
-                        <span>Prowadzący: {t.leadCoachName}</span>
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {t.isOwner ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-600/30 font-mono text-[10px] font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">
+                          <UserCheck className="size-3" />
+                          <span>Twój trening</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-stone-100 border border-stone-300 font-mono text-[10px] font-bold text-stone-700 dark:bg-stone-800 dark:border-stone-700 dark:text-stone-300">
+                          <Lock className="size-3 text-stone-500" />
+                          <span>Prowadzący: {t.leadCoachName}</span>
+                        </span>
+                      )}
+
+                      {!cancelled && t.status !== "completed" && t.isOwner && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCancellingTraining(t);
+                            setCancelReason("");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg border border-destructive/30 px-2 py-1 font-mono text-[10px] font-bold text-destructive hover:bg-destructive/10 transition-colors"
+                        >
+                          <Ban className="size-3" />
+                          <span>Odwołaj</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div>
-                    <h2 className="font-heading text-2xl tracking-tight sm:text-3xl">
+                    <h2
+                      className={cn(
+                        "font-heading text-2xl tracking-tight sm:text-3xl",
+                        cancelled && "line-through text-muted-foreground"
+                      )}
+                    >
                       {t.topic ?? "Trening bez zadanego tematu"}
                     </h2>
 
@@ -537,53 +702,75 @@ export function TrainingBoard() {
 
                   <div className="pt-2 border-t border-border/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
-                      {completed ? (
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-                          <CheckCircle2 className="size-4" />
+                      {cancelled ? (
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <Ban className="size-4 text-destructive" />
+                          <span>Jednostka odwołana — zwolniona z obowiązku oceny</span>
+                        </div>
+                      ) : completed ? (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                          <CheckCircle2 className="size-4 shrink-0" />
                           <span>Komplet ocen ({t.evaluatedCount} / {t.totalPlayers})</span>
+                          {t.guestCount > 0 && (
+                            <span className="rounded-md border border-amber-600/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300">
+                              {formatGuestBadge(t.guestCount)}
+                            </span>
+                          )}
                         </div>
                       ) : inProgress ? (
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                          <AlertCircle className="size-4" />
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                          <AlertCircle className="size-4 shrink-0" />
                           <span>W trakcie oceny ({t.evaluatedCount} / {t.totalPlayers})</span>
+                          {t.guestCount > 0 && (
+                            <span className="rounded-md border border-amber-600/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300">
+                              {formatGuestBadge(t.guestCount)}
+                            </span>
+                          )}
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                          <Clock className="size-4 text-muted-foreground" />
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <Clock className="size-4 text-muted-foreground shrink-0" />
                           <span>Brak ocen (0 / {t.totalPlayers})</span>
+                          {t.guestCount > 0 && (
+                            <span className="rounded-md border border-amber-600/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300">
+                              {formatGuestBadge(t.guestCount)}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
 
-                    {canOpen ? (
-                      <Link
-                        href={`/trener/${t.id}`}
-                        className={cn(
-                          buttonVariants({
-                            size: "default",
-                            variant: !t.isOwner ? "secondary" : completed ? "outline" : "default",
-                          }),
-                          "h-11 px-5 text-xs font-bold uppercase tracking-wider shrink-0 shadow-[2px_2px_0_0_var(--foreground)]",
-                          !t.isOwner && "border-2 border-foreground/20 hover:bg-muted"
-                        )}
-                      >
-                        {!t.isOwner ? (
-                          <span className="flex items-center gap-1.5">
-                            <Lock className="size-3.5" /> Podgląd ocen
-                          </span>
-                        ) : completed ? (
-                          "Popraw zapis"
-                        ) : inProgress ? (
-                          "Dokończ ocenę"
-                        ) : (
-                          "Oceń skład →"
-                        )}
-                      </Link>
-                    ) : (
-                      <span className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-foreground/15 bg-muted/40 px-3.5 font-mono text-[11px] font-semibold text-muted-foreground">
-                        <Clock className="size-3.5 text-muted-foreground" />
-                        <span>Oczekuje na termin</span>
-                      </span>
+                    {!cancelled && (
+                      canOpen ? (
+                        <Link
+                          href={`/trener/${t.id}`}
+                          className={cn(
+                            buttonVariants({
+                              size: "default",
+                              variant: !t.isOwner ? "secondary" : completed ? "outline" : "default",
+                            }),
+                            "h-11 px-5 text-xs font-bold uppercase tracking-wider shrink-0 shadow-[2px_2px_0_0_var(--foreground)]",
+                            !t.isOwner && "border-2 border-foreground/20 hover:bg-muted"
+                          )}
+                        >
+                          {!t.isOwner ? (
+                            <span className="flex items-center gap-1.5">
+                              <Lock className="size-3.5" /> Podgląd ocen
+                            </span>
+                          ) : completed ? (
+                            "Popraw zapis"
+                          ) : inProgress ? (
+                            "Dokończ ocenę"
+                          ) : (
+                            "Oceń skład →"
+                          )}
+                        </Link>
+                      ) : (
+                        <span className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-foreground/15 bg-muted/40 px-3.5 font-mono text-[11px] font-semibold text-muted-foreground">
+                          <Clock className="size-3.5 text-muted-foreground" />
+                          <span>Oczekuje na termin</span>
+                        </span>
+                      )
                     )}
                   </div>
                 </div>
@@ -593,7 +780,89 @@ export function TrainingBoard() {
         </ul>
       )}
 
-      {/* KREATOR JEDNOSTKI (WIZARD) */}
+      {/* MODAL ODWOŁANIA */}
+      {cancellingTraining && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border-2 border-foreground/30 bg-card p-6 shadow-[4px_4px_0_0_var(--foreground)] space-y-4">
+            <div className="flex items-center justify-between border-b border-border/80 pb-3">
+              <div className="flex items-center gap-2 text-destructive">
+                <Ban className="size-5" />
+                <h3 className="font-heading text-lg uppercase tracking-tight">
+                  Odwołaj trening
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancellingTraining(null)}
+                className="rounded-lg border border-border p-1 hover:bg-muted"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Czy na pewno chcesz odwołać trening rocznika{" "}
+              <strong className="text-foreground">{cancellingTraining.teamName}</strong> zaplanowany na{" "}
+              <strong className="text-foreground">{formatTrainingDate(cancellingTraining.date)}</strong>?
+              Jednostka zostanie zwolniona z obowiązku wystawiania ocen.
+            </p>
+
+            <div>
+              <label className="text-[11px] font-bold text-muted-foreground uppercase block mb-1.5">
+                Wybierz lub wpisz powód odwołania:
+              </label>
+              <div className="grid grid-cols-1 gap-1.5 mb-2">
+                {QUICK_CANCEL_REASONS.map((reason) => (
+                  <button
+                    key={reason}
+                    type="button"
+                    onClick={() => setCancelReason(reason)}
+                    className={cn(
+                      "rounded-lg border px-2.5 py-1.5 text-left text-xs transition active:scale-98",
+                      cancelReason === reason
+                        ? "border-foreground bg-primary text-primary-foreground font-semibold"
+                        : "border-border bg-background hover:bg-muted text-muted-foreground"
+                    )}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                type="text"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="Inny powód..."
+                className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 text-xs outline-none focus:border-foreground"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/80">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 text-xs font-bold"
+                onClick={() => setCancellingTraining(null)}
+                disabled={isCancellingSubmitting}
+              >
+                Wróć
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                className="h-10 text-xs font-bold uppercase tracking-wider shadow-[2px_2px_0_0_var(--foreground)]"
+                onClick={handleConfirmCancel}
+                disabled={isCancellingSubmitting}
+              >
+                {isCancellingSubmitting ? "Odwoływanie..." : "Potwierdź odwołanie"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* KREATOR WIZARD */}
       {isWizardOpen && (
         <div
           onTouchStart={handleTouchStart}
@@ -626,7 +895,6 @@ export function TrainingBoard() {
               </div>
             </div>
 
-            {/* Krok 1 */}
             {step === 1 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
                 <div>
@@ -957,7 +1225,6 @@ export function TrainingBoard() {
               </div>
             )}
 
-            {/* Krok 2 */}
             {step === 2 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
                 <div>
@@ -1021,7 +1288,6 @@ export function TrainingBoard() {
               </div>
             )}
 
-            {/* Krok 3 */}
             {step === 3 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
                 <div className="rounded-xl border-2 border-primary/30 bg-primary/5 p-3.5 text-xs text-muted-foreground">
@@ -1066,7 +1332,6 @@ export function TrainingBoard() {
               </div>
             )}
 
-            {/* Dolne przyciski kroków */}
             <div className="border-t pt-3">
               <div className="flex items-center gap-2">
                 {step > 1 ? (

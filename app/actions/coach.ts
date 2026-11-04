@@ -21,6 +21,7 @@ export interface DbTrainingCard {
   organizationalNote?: string;
   evaluatedCount: number;
   totalPlayers: number;
+  guestCount: number;
   leadCoachId: string | null;
   leadCoachName: string;
   isOwner: boolean;
@@ -55,6 +56,27 @@ export interface SurveySummary {
   }>;
 }
 
+export interface CoachAlertItem {
+  playerId: string;
+  playerName: string;
+  jerseyNumber: number | null;
+  teamName: string;
+  type: "negative_streak" | "high_fatigue" | "injury";
+  badgeText: string;
+  description: string;
+  severity: "danger" | "warning";
+}
+
+export interface GuestCandidatePlayer {
+  id: string;
+  firstName: string;
+  lastName: string;
+  jerseyNumber: number | null;
+  avatarUrl: string | null;
+  teamName: string;
+  ageGroup: string | null;
+}
+
 /**
  * 1. Pobiera listę jednostek treningowych i zespołów przypisanych do zalogowanego trenera
  */
@@ -79,7 +101,8 @@ export async function getCoachTrainingsAction() {
           is_active
         )
       `)
-      .eq("coach_id", user.id);
+      .eq("coach_id", user.id)
+      .is("revoked_at", null);
 
     if (assignErr) {
       console.error("Błąd zapytania team_coaches:", assignErr.message);
@@ -128,7 +151,8 @@ export async function getCoachTrainingsAction() {
       supabase
         .from("players")
         .select("current_team_id")
-        .in("current_team_id", teamIds),
+        .in("current_team_id", teamIds)
+        .eq("is_active", true),
     ]);
 
     if (trainingsRes.error) throw trainingsRes.error;
@@ -138,15 +162,15 @@ export async function getCoachTrainingsAction() {
     const trainingIds = trainings.map((t: any) => t.id);
 
     const evalsRes = trainingIds.length > 0
-      ? await supabase.from("evaluations").select("training_id").in("training_id", trainingIds)
+      ? await supabase
+          .from("evaluations")
+          .select("training_id, is_present, score, absence_reason, is_guest")
+          .in("training_id", trainingIds)
       : { data: [], error: null };
 
     if (evalsRes.error) throw evalsRes.error;
 
-    const evalsByTraining: Record<string, number> = {};
-    (evalsRes.data || []).forEach((e: any) => {
-      evalsByTraining[e.training_id] = (evalsByTraining[e.training_id] || 0) + 1;
-    });
+    const allEvaluations = evalsRes.data || [];
 
     const playersCountByTeam: Record<string, number> = {};
     (squadRes.data || []).forEach((p: any) => {
@@ -163,6 +187,15 @@ export async function getCoachTrainingsAction() {
       const isOwner = !t.lead_coach_id || t.lead_coach_id === user.id;
       const leadCoachName = coachProfile?.full_name || (isOwner ? "Twój profil" : "Inny trener");
 
+      const trainingEvals = allEvaluations.filter((e: any) => e.training_id === t.id);
+      const guestCount = trainingEvals.filter((e: any) => e.is_guest).length;
+      const baseTeamCount = playersCountByTeam[tId] || 0;
+      const totalPlayers = baseTeamCount + guestCount;
+
+      const evaluatedCount = trainingEvals.filter(
+        (e: any) => e.score !== null || (!e.is_present && e.absence_reason !== null)
+      ).length;
+
       return {
         id: t.id,
         teamId: tId,
@@ -176,8 +209,9 @@ export async function getCoachTrainingsAction() {
         trainingType: t.training_type || undefined,
         organizationalNote: t.organizational_note || undefined,
         status: t.status || "scheduled",
-        evaluatedCount: evalsByTraining[t.id] || 0,
-        totalPlayers: playersCountByTeam[tId] || 0,
+        evaluatedCount,
+        totalPlayers,
+        guestCount,
         leadCoachId: t.lead_coach_id,
         leadCoachName,
         isOwner,
@@ -303,7 +337,6 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       return { success: false, error: "Nie znaleziono jednostki lub brak do niej uprawnień." };
     }
 
-    // Pobieramy sztab, zawodników, oceny oraz ankiety bezpośrednio z bazy
     const [coachProfileRes, playersRes, evalsRes, surveysRes] = await Promise.all([
       training.lead_coach_id
         ? supabaseAdmin
@@ -316,10 +349,11 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
         .from("players")
         .select("id, first_name, last_name, jersey_number, avatar_url, parent_name, parent_phone, phone")
         .eq("current_team_id", training.team_id)
+        .eq("is_active", true)
         .order("jersey_number", { ascending: true, nullsFirst: false }),
       supabase
         .from("evaluations")
-        .select("player_id, score, is_present, absence_reason, comment")
+        .select("player_id, score, is_present, absence_reason, comment, is_guest")
         .eq("training_id", trainingId),
       supabaseAdmin
         .from("post_training_surveys")
@@ -348,7 +382,33 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
     const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
     const teamObj = Array.isArray(training.teams) ? training.teams[0] : training.teams;
 
-    const squad = (playersRes.data || []).map((p: any) => ({
+    const guestEvaluations = (evalsRes.data || []).filter((e: any) => e.is_guest);
+    const guestPlayerIds = Array.from(new Set(guestEvaluations.map((e: any) => e.player_id)));
+
+    let guestPlayers: any[] = [];
+    if (guestPlayerIds.length > 0) {
+      const { data: guests } = await supabase
+        .from("players")
+        .select("id, first_name, last_name, jersey_number, avatar_url, parent_name, parent_phone, phone")
+        .in("id", guestPlayerIds);
+
+      if (guests) {
+        guestPlayers = guests.map((g: any) => ({
+          id: g.id,
+          firstName: g.first_name,
+          lastName: g.last_name,
+          jerseyNumber: g.jersey_number || 0,
+          role: "Zawodnik",
+          avatarUrl: g.avatar_url || null,
+          parentName: g.parent_name || null,
+          parentPhone: g.parent_phone || null,
+          phone: g.phone || null,
+          isGuest: true,
+        }));
+      }
+    }
+
+    const regularPlayers = (playersRes.data || []).map((p: any) => ({
       id: p.id,
       firstName: p.first_name,
       lastName: p.last_name,
@@ -358,14 +418,21 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       parentName: p.parent_name || null,
       parentPhone: p.parent_phone || null,
       phone: p.phone || null,
+      isGuest: false,
     }));
+
+    const regularIds = new Set(regularPlayers.map((p) => p.id));
+    const squad = [
+      ...regularPlayers,
+      ...guestPlayers.filter((g) => !regularIds.has(g.id)),
+    ];
 
     const initialMarks: Record<string, Mark> = {};
     (evalsRes.data || []).forEach((row: any) => {
-      if (!row.is_present) {
+      if (!row.is_present && row.absence_reason) {
         initialMarks[row.player_id] = {
           type: "absence",
-          reason: row.absence_reason || "nieusprawiedliwiona",
+          reason: row.absence_reason,
           injury: row.comment?.startsWith("Uraz: ") ? row.comment.replace("Uraz: ", "") : undefined,
         };
       } else if (row.score) {
@@ -376,7 +443,6 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       }
     });
 
-    // Przeliczenie podsumowania ankiet RPE
     let surveySummary: SurveySummary | null = null;
     const surveyRows = surveysRes.data || [];
     const isSurveyEnabled = Boolean(training.survey_enabled) || surveyRows.length > 0;
@@ -636,7 +702,448 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 }
 
 /**
- * 7. Pobiera listę ankiet RPE i status wygaśnięcia
+ * 7. Oblicza alerty dla zawodników wymagających uwagi
+ */
+export async function getCoachAlertsAction(): Promise<{
+  success: boolean;
+  alerts?: CoachAlertItem[];
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: "Brak autoryzacji" };
+
+    const { data: coachTeams, error: ctError } = await supabase
+      .from("team_coaches")
+      .select("team_id")
+      .eq("coach_id", user.id)
+      .is("revoked_at", null);
+
+    if (ctError) throw ctError;
+
+    const teamIds = (coachTeams || []).map((ct: { team_id: string }) => ct.team_id);
+    if (teamIds.length === 0) return { success: true, alerts: [] };
+
+    const { data: players, error: pError } = await supabase
+      .from("players")
+      .select(`
+        id,
+        first_name,
+        last_name,
+        jersey_number,
+        current_team_id,
+        teams!current_team_id ( name )
+      `)
+      .in("current_team_id", teamIds)
+      .eq("is_active", true);
+
+    if (pError) throw pError;
+    const playerList = players || [];
+    if (playerList.length === 0) return { success: true, alerts: [] };
+
+    const playerIds = playerList.map((p) => p.id);
+
+    const { data: evaluations, error: eError } = await supabase
+      .from("evaluations")
+      .select(`
+        id,
+        player_id,
+        is_present,
+        score,
+        absence_reason,
+        created_at
+      `)
+      .in("player_id", playerIds)
+      .order("created_at", { ascending: false });
+
+    if (eError) throw eError;
+
+    const { data: surveys, error: sError } = await supabase
+      .from("post_training_surveys")
+      .select(`
+        id,
+        player_id,
+        fatigue,
+        satisfaction,
+        created_at
+      `)
+      .in("player_id", playerIds)
+      .eq("is_completed", true)
+      .order("created_at", { ascending: false });
+
+    if (sError) throw sError;
+
+    const evMap = new Map<string, typeof evaluations>();
+    (evaluations || []).forEach((ev) => {
+      const arr = evMap.get(ev.player_id) || [];
+      arr.push(ev);
+      evMap.set(ev.player_id, arr);
+    });
+
+    const svMap = new Map<string, typeof surveys>();
+    (surveys || []).forEach((sv) => {
+      const arr = svMap.get(sv.player_id) || [];
+      arr.push(sv);
+      svMap.set(sv.player_id, arr);
+    });
+
+    const alerts: CoachAlertItem[] = [];
+
+    for (const player of playerList) {
+      const pEvaluations = evMap.get(player.id) || [];
+      const pSurveys = svMap.get(player.id) || [];
+      const teamData = Array.isArray(player.teams) ? player.teams[0] : player.teams;
+      const teamName = teamData?.name || "Brak drużyny";
+      const playerName = `${player.first_name} ${player.last_name}`;
+
+      if (pEvaluations.length > 0) {
+        const latestEv = pEvaluations[0];
+        if (!latestEv.is_present && latestEv.absence_reason === "injury") {
+          alerts.push({
+            playerId: player.id,
+            playerName,
+            jerseyNumber: player.jersey_number,
+            teamName,
+            type: "injury",
+            badgeText: "Kontuzja",
+            description: "Ostatnia jednostka opuszczona z powodu urazu",
+            severity: "danger",
+          });
+          continue;
+        }
+      }
+
+      const scoredEvaluations = pEvaluations.filter((e) => e.is_present && e.score);
+      if (scoredEvaluations.length >= 2) {
+        const streakCount = scoredEvaluations.slice(0, 3).filter((e) => e.score === "-").length;
+        if (streakCount >= 2 && scoredEvaluations[0].score === "-") {
+          alerts.push({
+            playerId: player.id,
+            playerName,
+            jerseyNumber: player.jersey_number,
+            teamName,
+            type: "negative_streak",
+            badgeText: `${streakCount}x ocena '-'`,
+            description: "Spadek formy względem własnej normy",
+            severity: "danger",
+          });
+          continue;
+        }
+      }
+
+      if (pSurveys.length > 0) {
+        const latestSurvey = pSurveys[0];
+        if (latestSurvey.fatigue != null && latestSurvey.fatigue >= 5) {
+          alerts.push({
+            playerId: player.id,
+            playerName,
+            jerseyNumber: player.jersey_number,
+            teamName,
+            type: "high_fatigue",
+            badgeText: "Zmęczenie 5/5",
+            description: "Zawodnik zadeklarował maksymalne obciążenie",
+            severity: "warning",
+          });
+        }
+      }
+    }
+
+    return { success: true, alerts };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Błąd pobierania alertów" };
+  }
+}
+
+/**
+ * 8. Odwołuje jednostkę treningową
+ */
+export async function cancelTrainingAction(
+  trainingId: string,
+  reason?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return { success: false, error: "Brak autoryzacji" };
+
+    const { data: training, error: fetchError } = await supabase
+      .from("trainings")
+      .select("id, status, team_id, lead_coach_id, organizational_note")
+      .eq("id", trainingId)
+      .single();
+
+    if (fetchError || !training) {
+      return { success: false, error: "Jednostka treningowa nie istnieje" };
+    }
+
+    if (training.status === "completed") {
+      return { success: false, error: "Nie można odwołać zrealizowanego i zamkniętego treningu" };
+    }
+
+    const { data: assignment } = await supabase
+      .from("team_coaches")
+      .select("id")
+      .eq("team_id", training.team_id)
+      .eq("coach_id", user.id)
+      .is("revoked_at", null)
+      .maybeSingle();
+
+    const isAuthorized =
+      training.lead_coach_id === user.id ||
+      Boolean(assignment) ||
+      user.user_metadata?.role === "admin";
+
+    if (!isAuthorized) {
+      return { success: false, error: "Brak uprawnień do odwołania tej jednostki" };
+    }
+
+    let updatedNote = training.organizational_note || "";
+    if (reason?.trim()) {
+      updatedNote = updatedNote
+        ? `${updatedNote} | [ODWOŁANO]: ${reason.trim()}`
+        : `[ODWOŁANO]: ${reason.trim()}`;
+    }
+
+    const { error: updateError } = await supabase
+      .from("trainings")
+      .update({
+        status: "cancelled",
+        organizational_note: updatedNote || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", trainingId);
+
+    if (updateError) throw updateError;
+
+    revalidatePath("/trener");
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Błąd podczas odwoływania treningu" };
+  }
+}
+
+/**
+ * 9. Wyszukiwanie zawodników z innych roczników tego samego klubu
+ */
+export async function searchClubPlayersForGuestAction(
+  trainingId: string,
+  query: string
+): Promise<{
+  success: boolean;
+  candidates?: GuestCandidatePlayer[];
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return { success: false, error: "Brak autoryzacji" };
+
+    const { data: training, error: tError } = await supabase
+      .from("trainings")
+      .select("id, club_id, team_id")
+      .eq("id", trainingId)
+      .single();
+
+    if (tError || !training) {
+      return { success: false, error: "Jednostka treningowa nie istnieje" };
+    }
+
+    let targetClubId = training.club_id;
+    if (!targetClubId) {
+      const { data: teamData } = await supabase
+        .from("teams")
+        .select("club_id")
+        .eq("id", training.team_id)
+        .single();
+      targetClubId = teamData?.club_id;
+    }
+
+    // 1. Wykluczamy stałych zawodników drużyny tego treningu
+    const { data: teamPlayers } = await supabase
+      .from("players")
+      .select("id")
+      .eq("current_team_id", training.team_id);
+
+    const teamPlayerIds = (teamPlayers || []).map((p: any) => p.id);
+
+    // 2. Wykluczamy zawodników już zapisanych w ocenach jednostki (np. dodani wcześniej goście)
+    const { data: existingEvaluations } = await supabase
+      .from("evaluations")
+      .select("player_id")
+      .eq("training_id", trainingId);
+
+    const evaluatedPlayerIds = (existingEvaluations || []).map((e: any) => e.player_id);
+
+    const excludedIds = Array.from(new Set([...teamPlayerIds, ...evaluatedPlayerIds]));
+
+    let dbQuery = supabase
+      .from("players")
+      .select(`
+        id,
+        first_name,
+        last_name,
+        jersey_number,
+        avatar_url,
+        current_team_id,
+        teams!current_team_id (
+          name,
+          age_group
+        )
+      `)
+      .eq("is_active", true)
+      .neq("current_team_id", training.team_id)
+      .limit(60);
+
+    if (targetClubId) {
+      dbQuery = dbQuery.eq("club_id", targetClubId);
+    }
+
+    if (excludedIds.length > 0) {
+      dbQuery = dbQuery.not("id", "in", `(${excludedIds.join(",")})`);
+    }
+
+    const trimmedQuery = query.trim();
+    if (trimmedQuery.length > 0) {
+      dbQuery = dbQuery.or(
+        `first_name.ilike.%${trimmedQuery}%,last_name.ilike.%${trimmedQuery}%`
+      );
+    }
+
+    const { data: players, error: pError } = await dbQuery;
+    if (pError) throw pError;
+
+    const candidates: GuestCandidatePlayer[] = (players || []).map((p: any) => {
+      const team = Array.isArray(p.teams) ? p.teams[0] : p.teams;
+      return {
+        id: p.id,
+        firstName: p.first_name,
+        lastName: p.last_name,
+        jerseyNumber: p.jersey_number,
+        avatarUrl: p.avatar_url,
+        teamName: team?.name || "Brak zespołu",
+        ageGroup: team?.age_group || null,
+      };
+    });
+
+    return { success: true, candidates };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Błąd wyszukiwania zawodników" };
+  }
+}
+
+/**
+ * 10. Dodanie rekordu gościa do jednostki w tabeli evaluations
+ */
+export async function addGuestPlayerToTrainingAction(
+  trainingId: string,
+  playerId: string
+): Promise<{
+  success: boolean;
+  evaluationId?: string;
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return { success: false, error: "Brak autoryzacji" };
+
+    const { data: training, error: tError } = await supabase
+      .from("trainings")
+      .select("id, club_id, team_id, status, survey_enabled")
+      .eq("id", trainingId)
+      .single();
+
+    if (tError || !training) return { success: false, error: "Jednostka nie istnieje" };
+    if (training.status === "cancelled") {
+      return { success: false, error: "Nie można dodać zawodnika do odwołanego treningu" };
+    }
+
+    // Blokada dodania, jeśli gracz jest już w evaluations (zapobiega duplikatom)
+    const { data: existingEval } = await supabase
+      .from("evaluations")
+      .select("id")
+      .eq("training_id", trainingId)
+      .eq("player_id", playerId)
+      .maybeSingle();
+
+    if (existingEval) {
+      return { success: false, error: "Ten zawodnik jest już dopisany do tej jednostki" };
+    }
+
+    // Blokada dodania, jeśli to stały zawodnik tej samej drużyny
+    const { data: playerInfo } = await supabase
+      .from("players")
+      .select("current_team_id")
+      .eq("id", playerId)
+      .single();
+
+    if (playerInfo?.current_team_id === training.team_id) {
+      return { success: false, error: "Ten zawodnik jest już w składzie tej drużyny" };
+    }
+
+    let targetClubId = training.club_id;
+    if (!targetClubId) {
+      const { data: teamData } = await supabase
+        .from("teams")
+        .select("club_id")
+        .eq("id", training.team_id)
+        .single();
+      targetClubId = teamData?.club_id;
+    }
+
+    const { data: evaluation, error: insertError } = await supabase
+      .from("evaluations")
+      .insert({
+        training_id: trainingId,
+        player_id: playerId,
+        club_id: targetClubId,
+        evaluator_id: user.id,
+        is_present: true,
+        is_guest: true,
+        score: null,
+        absence_reason: null,
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      if (insertError.code === "23505") {
+        return { success: false, error: "Ten zawodnik jest już na liście tej jednostki" };
+      }
+      throw insertError;
+    }
+
+    if (training.survey_enabled && targetClubId) {
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 24);
+
+      await supabaseAdmin.from("post_training_surveys").insert({
+        club_id: targetClubId,
+        training_id: trainingId,
+        player_id: playerId,
+        token: randomUUID(),
+        recipient: "player",
+        expires_at: expiresAt.toISOString(),
+        is_completed: false,
+      });
+    }
+
+    revalidatePath(`/trener/${trainingId}`);
+    revalidatePath("/trener");
+
+    return { success: true, evaluationId: evaluation.id };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Błąd dodawania gościa" };
+  }
+}
+
+/**
+ * 11. Pobiera listę ankiet RPE i status wygaśnięcia
  */
 export async function getTrainingSurveysStatusAction(trainingId: string): Promise<{
   success: boolean;

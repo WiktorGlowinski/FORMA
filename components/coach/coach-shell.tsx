@@ -1,26 +1,79 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
-import { LogOut } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { LogOut, Users, Dumbbell } from "lucide-react";
 import { PitchArt, PitchMark } from "@/components/landing/mark";
 import { signOutAction } from "@/app/actions/auth";
 import { useCoachStore } from "@/store/useCoachStore";
+import { cn } from "@/lib/utils";
+
+function CoachNav() {
+  const pathname = usePathname();
+  const isUnitsActive =
+    pathname === "/trener" ||
+    (pathname.startsWith("/trener/") && !pathname.startsWith("/trener/zawodnicy"));
+  const isSquadActive = pathname.startsWith("/trener/zawodnicy");
+
+  return (
+    <nav className="flex items-center gap-2 sm:gap-4 text-sm" aria-label="Panel trenera">
+      <Link
+        href="/trener"
+        className={cn(
+          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-1.5 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
+          isUnitsActive
+            ? "border-foreground bg-primary text-primary-foreground font-bold shadow-[2px_2px_0_0_var(--foreground)]"
+            : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
+        )}
+      >
+        <Dumbbell className="size-3.5" />
+        <span>Jednostki</span>
+      </Link>
+
+      <Link
+        href="/trener/zawodnicy"
+        className={cn(
+          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-1.5 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
+          isSquadActive
+            ? "border-foreground bg-primary text-primary-foreground font-bold shadow-[2px_2px_0_0_var(--foreground)]"
+            : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
+        )}
+      >
+        <Users className="size-3.5" />
+        <span>Kadra</span>
+      </Link>
+    </nav>
+  );
+}
+
+function CoachNavFallback() {
+  return (
+    <nav className="flex items-center gap-2 sm:gap-4 text-sm opacity-60" aria-label="Panel trenera">
+      <span className="flex items-center gap-1.5 rounded-xl border-2 border-foreground bg-primary text-primary-foreground font-bold px-3 py-1.5 font-heading text-xs uppercase tracking-wider">
+        <Dumbbell className="size-3.5" />
+        <span>Jednostki</span>
+      </span>
+      <span className="flex items-center gap-1.5 rounded-xl border-2 border-transparent text-muted-foreground px-3 py-1.5 font-heading text-xs uppercase tracking-wider">
+        <Users className="size-3.5" />
+        <span>Kadra</span>
+      </span>
+    </nav>
+  );
+}
 
 export function CoachShell({ children }: { children: React.ReactNode }) {
   const invalidateCache = useCoachStore((state) => state.invalidateCache);
 
   async function handleSignOut() {
-    // 1. Natychmiastowe wyczyszczenie pamięci Zustand w RAM
     invalidateCache();
-    // 2. Usunięcie sesji na serwerze Supabase
     await signOutAction();
-    // 3. Twardy reload — gwarancja zresetowania całego stanu JS w karcie
     window.location.href = "/login";
   }
 
   return (
     <div className="relative flex min-h-screen flex-1 flex-col overflow-x-hidden bg-background">
-      {/* CHARAKTERYSTYCZNE LINIE BOISKA FORMY W TLE */}
+      {/* LINIE BOISKA FORMY W TLE */}
       <PitchArt className="pointer-events-none fixed top-16 -right-[15%] w-[680px] text-foreground/10 select-none opacity-60 block" />
       <PitchArt className="pointer-events-none fixed bottom-0 -left-[20%] w-[600px] text-foreground/10 select-none opacity-40 hidden md:block rotate-180" />
 
@@ -32,24 +85,26 @@ export function CoachShell({ children }: { children: React.ReactNode }) {
             <span className="font-heading text-[1.85rem] leading-none tracking-wide uppercase">Forma</span>
           </Link>
 
-          <nav className="flex items-center gap-4 sm:gap-6 text-sm text-muted-foreground" aria-label="Panel trenera">
-            <Link href="/trener" className="pitch-link font-bold text-foreground">
-              Jednostki
+          <div className="flex items-center gap-2 sm:gap-4">
+            <Suspense fallback={<CoachNavFallback />}>
+              <CoachNav />
+            </Suspense>
+
+            <div className="h-5 w-px bg-border/80 mx-1 hidden sm:block" />
+
+            <Link href="/" className="pitch-link text-xs text-muted-foreground hidden sm:block">
+              Start
             </Link>
-            <Link href="/" className="pitch-link text-xs sm:text-sm">
-              Strona startowa
-            </Link>
-            
-            {/* Przycisk bezpiecznego wylogowania ze sztabu */}
+
             <button
               type="button"
               onClick={handleSignOut}
-              className="inline-flex items-center gap-1.5 rounded-md border-2 border-foreground/15 px-3 py-1.5 text-xs font-semibold tracking-wider uppercase transition hover:-translate-y-0.5 hover:border-destructive/60 hover:text-destructive hover:shadow-[2px_2px_0_0_var(--foreground)] active:scale-95"
+              className="inline-flex items-center gap-1.5 rounded-xl border-2 border-foreground/20 px-3 py-1.5 text-xs font-bold tracking-wider uppercase transition hover:border-destructive/60 hover:text-destructive hover:shadow-[2px_2px_0_0_var(--foreground)] active:scale-95"
             >
               <LogOut className="size-3.5" />
-              <span>Wyloguj</span>
+              <span className="hidden sm:inline">Wyloguj</span>
             </button>
-          </nav>
+          </div>
         </div>
       </header>
 

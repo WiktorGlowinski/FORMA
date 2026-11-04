@@ -100,7 +100,6 @@ function SurveyContent() {
     );
   }
 
-  // WIDOK WYGAŚNIĘCIA ANKIETY (po upływie expires_at)
   if (isExpired) {
     return (
       <main className="min-h-screen bg-[#F4F1EA] flex items-center justify-center p-4 font-sans antialiased">
@@ -131,10 +130,11 @@ function SurveyContent() {
     );
   }
 
+  const activeSelectedPlayer = data.pendingPlayers.find((p) => p.id === selectedPlayerId);
+
   return (
     <main className="min-h-screen bg-[#F4F1EA] text-stone-900 flex flex-col justify-between p-4 sm:p-6 font-sans antialiased">
       <div className="w-full max-w-md mx-auto my-auto space-y-4">
-        
         {/* BRANDING HEADER */}
         <header className="flex items-center justify-between pb-2 border-b border-stone-300/60">
           <div className="flex items-center gap-2.5">
@@ -153,19 +153,25 @@ function SurveyContent() {
         {/* KARTA JEDNOSTKI */}
         <div className="bg-white border border-stone-200/90 rounded-2xl p-4 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Jednostka treningowa</span>
+            <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">
+              Jednostka treningowa
+            </span>
             <p className="text-sm font-black text-stone-900">{data.date}</p>
-            {data.topic && <p className="text-xs text-stone-500 font-medium truncate max-w-xs">{data.topic}</p>}
+            {data.topic && (
+              <p className="text-xs text-stone-500 font-medium truncate max-w-xs">{data.topic}</p>
+            )}
           </div>
           <div className="text-right">
-            <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Do wypełnienia</span>
+            <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">
+              Do wypełnienia
+            </span>
             <span className="text-xs font-black text-[#133E2B] bg-[#133E2B]/10 px-2 py-0.5 rounded-md">
               {data.pendingPlayers.length} graczy
             </span>
           </div>
         </div>
 
-        {/* KOMUNIKAT POTWIERDZENIA BEZ TEKSTU O TELEFONIE */}
+        {/* KOMUNIKAT POTWIERDZENIA */}
         {submittedName && (
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3 animate-in fade-in">
             <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
@@ -191,7 +197,7 @@ function SurveyContent() {
               </p>
             </div>
           ) : !selectedPlayerId ? (
-            /* KROK 1: LISTA ZAWODNIKÓW */
+            /* KROK 1: LISTA ZAWODNIKÓW Z ETYKIETĄ GOŚCIA */
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-xs font-black uppercase tracking-wider text-stone-600">
@@ -209,15 +215,22 @@ function SurveyContent() {
                     onClick={() => handleSelectPlayer(player.id)}
                     className="flex items-center justify-between p-3.5 rounded-xl border border-stone-200/90 bg-[#FAF9F5] hover:bg-stone-50 hover:border-[#133E2B] transition-all text-left group active:scale-[0.99]"
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="w-7 h-7 rounded-lg bg-stone-200 text-stone-700 text-xs font-black flex items-center justify-center">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="w-7 h-7 shrink-0 rounded-lg bg-stone-200 text-stone-700 text-xs font-black flex items-center justify-center">
                         {player.jerseyNumber ?? "—"}
                       </span>
-                      <span className="text-sm font-bold text-stone-900 group-hover:text-[#133E2B] transition-colors">
-                        {player.firstName} {player.lastName}
-                      </span>
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="text-sm font-bold text-stone-900 group-hover:text-[#133E2B] transition-colors truncate">
+                          {player.firstName} {player.lastName}
+                        </span>
+                        {player.isGuest && (
+                          <span className="shrink-0 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-600/30 px-1.5 py-0.5 rounded">
+                            Gość
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-xs text-stone-400 group-hover:text-[#133E2B] transition-colors">
+                    <span className="text-xs text-stone-400 group-hover:text-[#133E2B] transition-colors shrink-0 ml-2">
                       →
                     </span>
                   </button>
@@ -229,11 +242,19 @@ function SurveyContent() {
             <form onSubmit={handleSubmit} className="space-y-5 animate-in fade-in duration-150">
               <div className="flex items-center justify-between pb-3 border-b border-stone-100">
                 <div>
-                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Wypełniasz jako</span>
-                  <p className="text-sm font-black text-stone-900">
-                    {data.pendingPlayers.find((p) => p.id === selectedPlayerId)?.firstName}{" "}
-                    {data.pendingPlayers.find((p) => p.id === selectedPlayerId)?.lastName}
-                  </p>
+                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">
+                    Wypełniasz jako
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-black text-stone-900">
+                      {activeSelectedPlayer?.firstName} {activeSelectedPlayer?.lastName}
+                    </p>
+                    {activeSelectedPlayer?.isGuest && (
+                      <span className="text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-600/30 px-1.5 py-0.5 rounded">
+                        Gość
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -341,7 +362,7 @@ function SurveyContent() {
                 <textarea
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  placeholder="Np. lekki ból w dwugłowym, dobre gierki..."
+                  placeholder="Np. lekki ból w dwugłowym, dobre tempo..."
                   rows={2}
                   className="w-full text-xs font-medium p-3.5 rounded-xl border border-stone-200 bg-[#FAF9F5] focus:bg-white focus:outline-none focus:border-[#133E2B] focus:ring-1 focus:ring-[#133E2B] transition-all resize-none"
                 />

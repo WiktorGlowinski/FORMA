@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useCoachStore } from "@/store/useCoachStore";
 import Link from "next/link";
 import {
@@ -24,6 +24,10 @@ import {
   Clock,
   MessageSquare,
   Users,
+  UserPlus,
+  CloudCheck,
+  CloudOff,
+  RefreshCw,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -44,6 +48,7 @@ import {
   enableTrainingSurveyAction,
   type SurveySummary,
 } from "@/app/actions/coach";
+import { AddGuestPlayerModal } from "@/components/coach/add-guest-player-modal";
 import { cn } from "@/lib/utils";
 
 export type EvaluationPlayer = SquadPlayer & {
@@ -51,7 +56,15 @@ export type EvaluationPlayer = SquadPlayer & {
   parentName?: string | null;
   parentPhone?: string | null;
   phone?: string | null;
+  isGuest?: boolean;
 };
+
+interface OfflineQueueItem {
+  trainingId: string;
+  playerId: string;
+  mark: Mark;
+  timestamp: number;
+}
 
 export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   const {
@@ -60,6 +73,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     updateMarkInCache,
     resetCachedMarks,
     updateCachedSurveyStatus,
+    invalidateCache,
   } = useCoachStore();
 
   const cached = evaluationsCache[trainingId];
@@ -85,61 +99,137 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   const [surveySummary, setSurveySummary] = useState<SurveySummary | null>(null);
   const [index, setIndex] = useState(0);
 
+  // BR-021: Stany synchronizacji i odporności offline
+  const [syncStatus, setSyncStatus] = useState<"synced" | "offline" | "syncing">("synced");
+  const [pendingQueueCount, setPendingQueueCount] = useState(0);
+
   const [absenceModalOpen, setAbsenceModalOpen] = useState(false);
   const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<AbsenceReason | null>(null);
 
   const [sosModalOpen, setSosModalOpen] = useState(false);
   const [sosSearch, setSosSearch] = useState("");
 
-  useEffect(() => {
-    // 1. Jeśli mamy dane w pamięci Zustand, wstępnie ustawiamy wskaźnik zawodnika (natychmiastowy render bez loadera)
-    if (cached) {
-      const firstUnrated = cached.squad.findIndex((p: SquadPlayer) => !cached.initialMarks?.[p.id]);
-      if (firstUnrated !== -1) {
-        setIndex(firstUnrated);
-      } else if (cached.squad.length > 0) {
-        setIndex(cached.squad.length);
-      }
+  const [guestModalOpen, setGuestModalOpen] = useState(false);
+
+  // Klucze pamięci podręcznej per jednostka treningowa
+  const STORAGE_KEY_INDEX = `forma_eval_index_${trainingId}`;
+  const STORAGE_KEY_QUEUE = `forma_eval_queue_${trainingId}`;
+
+  // BR-021: Automatyczne opróżnianie kolejki offline po powrocie połączenia
+  const flushOfflineQueue = useCallback(async () => {
+    if (typeof window === "undefined") return;
+    const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
+    if (!rawQueue) {
+      setPendingQueueCount(0);
+      setSyncStatus("synced");
+      return;
     }
 
-    // 2. KLUCZOWA POPRAWKA ZUSTAND: NIE wychodzimy z funkcji!
-    // Zawsze odpytujemy serwer w tle o świeży status 24h i ankiet RPE (wzorzec Stale-While-Revalidate)
-    async function init() {
-      if (!trainingId) {
-        setErrorMsg("Brak identyfikatora jednostki treningowej.");
-        setLoading(false);
+    try {
+      const queue: OfflineQueueItem[] = JSON.parse(rawQueue);
+      if (queue.length === 0) {
+        setPendingQueueCount(0);
+        setSyncStatus("synced");
         return;
       }
 
-      if (!cached) {
-        setLoading(true);
-      }
-      setErrorMsg(null);
+      setSyncStatus("syncing");
+      const remaining: OfflineQueueItem[] = [];
 
-      const res = await getTrainingEvaluationDataAction(trainingId);
-
-      if (!res.success) {
-        if (!cached) {
-          setErrorMsg(res.error || "Nie udało się pobrać jednostki.");
+      for (const item of queue) {
+        try {
+          const res = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark);
+          if (!res.success) remaining.push(item);
+        } catch {
+          remaining.push(item);
         }
-      } else if (res.training && res.squad) {
-        const squad = res.squad as EvaluationPlayer[];
-        const initialMarks = res.initialMarks || {};
+      }
 
-        setTraining(res.training);
-        setPlayers(squad);
-        setMarks(initialMarks);
-        setSurveySummary(res.surveySummary || null);
+      if (remaining.length > 0) {
+        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(remaining));
+        setPendingQueueCount(remaining.length);
+        setSyncStatus("offline");
+      } else {
+        localStorage.removeItem(STORAGE_KEY_QUEUE);
+        setPendingQueueCount(0);
+        setSyncStatus("synced");
+      }
+    } catch {
+      setSyncStatus("offline");
+    }
+  }, [trainingId, STORAGE_KEY_QUEUE]);
 
-        // Aktualizujemy cache w Zustand o świeże dane
-        cacheEvaluationData(trainingId, {
-          training: res.training,
-          squad,
-          initialMarks,
-        });
+  // BR-021: Nasłuch przywrócenia połączenia sieciowego
+  useEffect(() => {
+    function handleOnline() {
+      flushOfflineQueue();
+    }
+    function handleOffline() {
+      setSyncStatus("offline");
+    }
 
-        // Wskaźnik ustawiamy tylko na pierwszym montowaniu bez cache
-        if (!cached) {
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    // Sprawdzenie czy w buforze czekają niezsynchronizowane wpisy
+    const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
+    if (rawQueue) {
+      try {
+        const q = JSON.parse(rawQueue);
+        if (q.length > 0) {
+          setPendingQueueCount(q.length);
+          flushOfflineQueue();
+        }
+      } catch {}
+    }
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [flushOfflineQueue, STORAGE_KEY_QUEUE]);
+
+  async function fetchEvaluationData(initialLoad = false) {
+    if (!trainingId) {
+      setErrorMsg("Brak identyfikatora jednostki treningowej.");
+      setLoading(false);
+      return;
+    }
+
+    if (initialLoad && !cached) {
+      setLoading(true);
+    }
+    setErrorMsg(null);
+
+    const res = await getTrainingEvaluationDataAction(trainingId);
+
+    if (!res.success) {
+      if (initialLoad && !cached) {
+        setErrorMsg(res.error || "Nie udało się pobrać jednostki.");
+      }
+    } else if (res.training && res.squad) {
+      const squad = res.squad as EvaluationPlayer[];
+      const initialMarks = res.initialMarks || {};
+
+      setTraining(res.training);
+      setPlayers(squad);
+      setMarks(initialMarks);
+      setSurveySummary(res.surveySummary || null);
+
+      cacheEvaluationData(trainingId, {
+        training: res.training,
+        squad,
+        initialMarks,
+      });
+
+      // BR-021: Wznawianie pozycji z localStorage lub pierwszego nieocenionego
+      if (initialLoad) {
+        const savedIndexRaw = localStorage.getItem(STORAGE_KEY_INDEX);
+        const savedIndex = savedIndexRaw !== null ? parseInt(savedIndexRaw, 10) : null;
+
+        if (savedIndex !== null && !isNaN(savedIndex) && savedIndex >= 0 && savedIndex <= squad.length) {
+          setIndex(savedIndex);
+        } else {
           const firstUnrated = squad.findIndex((p: SquadPlayer) => !initialMarks[p.id]);
           if (firstUnrated !== -1) {
             setIndex(firstUnrated);
@@ -148,10 +238,12 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
           }
         }
       }
-      setLoading(false);
     }
+    setLoading(false);
+  }
 
-    init();
+  useEffect(() => {
+    fetchEvaluationData(true);
   }, [trainingId]);
 
   if (loading) {
@@ -178,19 +270,51 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
   const hasAnyParentContacts = players.some((p) => Boolean(p.parentPhone));
 
+  // BR-021: Zapis z natychmiastowym buforem lokalnym i kolejką offline
   async function commit(mark: Mark) {
     if (!player) return;
     if (!isOwner) {
       alert("Nie możesz edytować ocen treningu prowadzonego przez innego trenera.");
       return;
     }
+
+    const nextIndex = Math.min(index + 1, total);
+
+    // 1. Natychmiastowy stan UI i cache Zustand
     setMarks((curr) => ({ ...curr, [player.id]: mark }));
     setAbsenceModalOpen(false);
     setSelectedAbsenceReason(null);
-    setIndex((current) => Math.min(current + 1, total));
-
+    setIndex(nextIndex);
     updateMarkInCache(trainingId, player.id, mark);
-    await savePlayerMarkAction(trainingId, player.id, mark);
+
+    // 2. BR-021: Zapis pozycji sesji w pamięci urządzenia
+    try {
+      localStorage.setItem(STORAGE_KEY_INDEX, nextIndex.toString());
+    } catch {}
+
+    // 3. Wysłanie na serwer lub do kolejki offline w razie braku sieci
+    try {
+      const res = await savePlayerMarkAction(trainingId, player.id, mark);
+      if (!res.success) {
+        throw new Error(res.error || "Błąd zapisu");
+      }
+      setSyncStatus("synced");
+    } catch {
+      // Zapisujemy do kolejki w localStorage na wypadek utraty zasięgu
+      try {
+        const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
+        const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
+        queue.push({
+          trainingId,
+          playerId: player.id,
+          mark,
+          timestamp: Date.now(),
+        });
+        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queue));
+        setPendingQueueCount(queue.length);
+        setSyncStatus("offline");
+      } catch {}
+    }
   }
 
   async function handleReset() {
@@ -209,6 +333,14 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       setAbsenceModalOpen(false);
       setSelectedAbsenceReason(null);
       resetCachedMarks(trainingId);
+
+      // BR-021: Czyszczenie bufora lokalnego
+      try {
+        localStorage.removeItem(STORAGE_KEY_INDEX);
+        localStorage.removeItem(STORAGE_KEY_QUEUE);
+        setPendingQueueCount(0);
+        setSyncStatus("synced");
+      } catch {}
     } else {
       alert(res.error || "Wystąpił błąd podczas usuwania ocen.");
     }
@@ -219,6 +351,39 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     setAbsenceModalOpen(false);
     setSelectedAbsenceReason(null);
     setIndex(next);
+    try {
+      localStorage.setItem(STORAGE_KEY_INDEX, next.toString());
+    } catch {}
+  }
+
+  async function handleGuestAdded() {
+    setLoading(true);
+    invalidateCache();
+
+    const res = await getTrainingEvaluationDataAction(trainingId);
+    if (res.success && res.training && res.squad) {
+      const squad = res.squad as EvaluationPlayer[];
+      const initialMarks = res.initialMarks || {};
+
+      setTraining(res.training);
+      setPlayers(squad);
+      setMarks(initialMarks);
+      setSurveySummary(res.surveySummary || null);
+
+      cacheEvaluationData(trainingId, {
+        training: res.training,
+        squad,
+        initialMarks,
+      });
+
+      const firstUnrated = squad.findIndex((p) => !initialMarks[p.id]);
+      const targetIndex = firstUnrated !== -1 ? firstUnrated : squad.length - 1;
+      setIndex(targetIndex);
+      try {
+        localStorage.setItem(STORAGE_KEY_INDEX, targetIndex.toString());
+      } catch {}
+    }
+    setLoading(false);
   }
 
   const filteredSosPlayers = players.filter(
@@ -229,12 +394,48 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
   return (
     <div className="mx-auto max-w-xl pb-8">
+      {/* GÓRNY PASEK NAWIGACYJNY ZE WSKAŹNIKIEM BR-021 */}
       <div className="flex items-center justify-between gap-2">
         <Link href="/trener" className="pitch-link text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           ← Wróć do jednostek
         </Link>
 
         <div className="flex items-center gap-2">
+          {/* BR-021: Wskaźnik zapisu i odporności sesji */}
+          {syncStatus === "syncing" ? (
+            <span className="flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 font-mono text-[10px] font-bold text-primary animate-pulse">
+              <RefreshCw className="size-3 animate-spin" />
+              <span>Zapisuję...</span>
+            </span>
+          ) : syncStatus === "offline" ? (
+            <button
+              type="button"
+              onClick={flushOfflineQueue}
+              className="flex items-center gap-1 rounded-md bg-amber-500/15 border border-amber-600/30 px-2 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300"
+              title="Czeka na połączenie z siecią. Kliknij, aby ponowić próbę."
+            >
+              <CloudOff className="size-3" />
+              <span>Offline ({pendingQueueCount})</span>
+            </button>
+          ) : (
+            <span className="hidden sm:flex items-center gap-1 font-mono text-[10px] text-muted-foreground/80">
+              <CloudCheck className="size-3 text-emerald-600" />
+              <span>Zapisano w locie</span>
+            </span>
+          )}
+
+          {isOwner && (
+            <button
+              type="button"
+              onClick={() => setGuestModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border-2 border-foreground/20 bg-background px-2.5 py-1 font-mono text-[11px] font-bold text-foreground uppercase tracking-wide hover:border-primary hover:text-primary active:scale-95 transition-all shadow-[2px_2px_0_0_var(--foreground)]"
+            >
+              <UserPlus className="size-3.5" />
+              <span className="hidden sm:inline">+ Gość</span>
+              <span className="sm:hidden">+</span>
+            </button>
+          )}
+
           {hasAnyParentContacts && (
             <button
               type="button"
@@ -262,6 +463,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         </div>
       )}
 
+      {/* GŁÓWNA KARTA OCENIANIA */}
       <div className="print-card mt-3 overflow-hidden rounded-xl border-2 border-foreground/20 bg-card shadow-sm">
         <div className="mow-stripes flex items-center justify-between gap-3 px-4 py-2.5 text-chalk">
           <p className="text-xs font-medium uppercase tracking-wider">Ocena składu</p>
@@ -412,6 +614,13 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
           </div>
         )}
       </div>
+
+      <AddGuestPlayerModal
+        trainingId={trainingId}
+        isOpen={guestModalOpen}
+        onClose={() => setGuestModalOpen(false)}
+        onPlayerAdded={handleGuestAdded}
+      />
 
       {sosModalOpen && (
         <div className="fixed inset-0 z-50 flex flex-col justify-between bg-background/98 p-4 backdrop-blur-md sm:p-8 animate-in fade-in duration-200">
@@ -801,9 +1010,16 @@ function TinderCard({
           </div>
 
           <div className="mt-3">
-            <h2 className="font-heading text-3xl leading-tight tracking-tight sm:text-4xl">
-              {playerName(player)}
-            </h2>
+            <div className="flex items-center justify-center gap-1.5">
+              <h2 className="font-heading text-3xl leading-tight tracking-tight sm:text-4xl">
+                {playerName(player)}
+              </h2>
+              {player.isGuest && (
+                <span className="rounded bg-amber-500/15 border border-amber-600/30 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase">
+                  Gość
+                </span>
+              )}
+            </div>
             <p className="mt-1 text-xs font-medium text-muted-foreground">
               {player.role} · ocena względem własnej normy
             </p>
@@ -949,7 +1165,6 @@ function Summary({
         </div>
       </dl>
 
-      {/* SEKCJA ANKIET RPE: PODSUMOWANIE PO 24H LUB WYSYŁKA PODCZAS TRWANIA */}
       {surveySummary && surveySummary.isExpired ? (
         <div className="mt-5 rounded-2xl border-2 border-foreground/20 bg-card p-4 sm:p-5 shadow-[3px_3px_0_0_var(--foreground)] space-y-4 animate-in fade-in duration-200">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/80 pb-3">
@@ -1142,9 +1357,14 @@ function Summary({
                   </div>
                 )}
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">
-                    <span className="mr-1.5 font-mono text-muted-foreground">#{p.jerseyNumber}</span>
-                    {playerName(p)}
+                  <p className="truncate text-sm font-semibold flex items-center gap-1.5">
+                    <span className="font-mono text-muted-foreground">#{p.jerseyNumber}</span>
+                    <span>{playerName(p)}</span>
+                    {p.isGuest && (
+                      <span className="rounded bg-amber-500/15 border border-amber-600/30 px-1 py-0.2 font-mono text-[9px] font-bold text-amber-800 dark:text-amber-300 uppercase">
+                        Gość
+                      </span>
+                    )}
                   </p>
                   <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                     {injury ? <InjuryIcon kind={injury} className="size-3.5 shrink-0 text-destructive" /> : null}
