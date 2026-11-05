@@ -75,6 +75,7 @@ export interface PlayerHistoryRecord {
   isPresent: boolean;
   score: string | null;
   absenceReason: string | null;
+  note: string | null;
   date: string | null;
   topic: string | null;
   trainingType: string | null;
@@ -231,6 +232,7 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
         is_present,
         score,
         absence_reason,
+        comment,
         created_at,
         trainings (
           id,
@@ -267,6 +269,7 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
       is_present: boolean;
       score: string | null;
       absence_reason: string | null;
+      comment: string | null;
       trainings: {
         date: string;
         topic: string | null;
@@ -284,6 +287,9 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
         isPresent: Boolean(r.is_present),
         score: r.score,
         absenceReason: r.absence_reason,
+        note: r.comment?.includes("Notatka: ")
+          ? r.comment.slice(r.comment.indexOf("Notatka: ") + "Notatka: ".length).trim()
+          : null,
         date: tr?.date || null,
         topic: tr?.topic || null,
         trainingType: tr?.training_type || null,

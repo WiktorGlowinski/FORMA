@@ -66,6 +66,29 @@ type EvaluationPlayer = {
   isGuest: boolean;
 };
 
+function getInjuryKindFromComment(comment: string | null | undefined): InjuryKind | null {
+  const firstLine = comment?.split(/\r?\n/, 1)[0] || "";
+  if (!firstLine.startsWith("Uraz: ")) return null;
+  const value = firstLine.slice("Uraz: ".length);
+  return INJURY_KINDS.find((kind) => kind.id === value)?.id ?? null;
+}
+
+function getEvaluationNote(comment: string | null | undefined): string {
+  if (!comment) return "";
+  const noteMarker = "Notatka: ";
+  const markerIndex = comment.indexOf(noteMarker);
+  return markerIndex < 0 ? "" : comment.slice(markerIndex + noteMarker.length).trim();
+}
+
+function createEvaluationComment(mark: Mark, note: string): string | null {
+  const parts: string[] = [];
+  if (mark.type === "absence" && mark.reason === "injury" && mark.injury) {
+    parts.push(`Uraz: ${mark.injury}`);
+  }
+  if (note.trim()) parts.push(`Notatka: ${note.trim()}`);
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
 export interface DbTrainingCard {
   id: string;
   teamId: string;
@@ -672,13 +695,8 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
 
         previousInjuries = (previousEvaluations || []).reduce<Record<string, InjuryKind>>(
           (injuries, evaluation) => {
-            const injury = evaluation.comment?.startsWith("Uraz: ")
-              ? evaluation.comment.slice("Uraz: ".length)
-              : null;
-            const matchingKind = INJURY_KINDS.find((kind) => kind.id === injury);
-            if (matchingKind) {
-              injuries[evaluation.player_id] = matchingKind.id;
-            }
+            const injury = getInjuryKindFromComment(evaluation.comment);
+            if (injury) injuries[evaluation.player_id] = injury;
             return injuries;
           },
           {}
@@ -750,16 +768,15 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
     ];
 
     const initialMarks: Record<string, Mark> = {};
+    const initialNotes: Record<string, string> = {};
     (evalsRes.data || []).forEach((row: TrainingEvaluationRow) => {
+      const note = getEvaluationNote(row.comment);
+      if (note) initialNotes[row.player_id] = note;
       if (!row.is_present && row.absence_reason) {
-        const injuryValue = row.comment?.startsWith("Uraz: ")
-          ? row.comment.slice("Uraz: ".length)
-          : null;
-        const injury = INJURY_KINDS.find((kind) => kind.id === injuryValue)?.id;
         initialMarks[row.player_id] = {
           type: "absence",
           reason: row.absence_reason,
-          injury,
+          injury: getInjuryKindFromComment(row.comment) ?? undefined,
         };
       } else if (row.score) {
         initialMarks[row.player_id] = {
@@ -830,6 +847,7 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       },
       squad,
       initialMarks,
+      initialNotes,
       previousInjuries,
       surveySummary,
     };
@@ -841,7 +859,12 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
 /**
  * 4. Zapisuje pojedynczą ocenę zawodnika w locie i aktualizuje status jednostki
  */
-export async function savePlayerMarkAction(trainingId: string, playerId: string, mark: Mark) {
+export async function savePlayerMarkAction(
+  trainingId: string,
+  playerId: string,
+  mark: Mark,
+  note = ""
+) {
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -888,9 +911,13 @@ export async function savePlayerMarkAction(trainingId: string, playerId: string,
     const isPresent = mark.type === "score";
     const scoreVal = mark.type === "score" ? mark.score : null;
     const absenceReason = mark.type === "absence" ? mark.reason : null;
-    const commentVal = mark.type === "absence" && mark.reason === "injury" && mark.injury 
-      ? `Uraz: ${mark.injury}` 
-      : null;
+    if (typeof note !== "string") {
+      return { success: false, error: "Notatka ma nieprawidłowy format." };
+    }
+    if (note.length > 2000) {
+      return { success: false, error: "Notatka może mieć maksymalnie 2000 znaków." };
+    }
+    const commentVal = createEvaluationComment(mark, note);
 
     const { error } = await supabaseAdmin
       .from("evaluations")

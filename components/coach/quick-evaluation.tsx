@@ -58,6 +58,7 @@ import {
   submitInPersonSurveyResponse,
 } from "@/app/actions/surveys";
 import { AddGuestPlayerModal } from "@/components/coach/add-guest-player-modal";
+import { VoiceTextInput } from "@/components/ui/voice-text-input";
 import { cn } from "@/lib/utils";
 
 const subscribeToShareSupport = () => () => {};
@@ -77,6 +78,7 @@ interface OfflineQueueItem {
   trainingId: string;
   playerId: string;
   mark: Mark;
+  note?: string;
   timestamp: number;
 }
 
@@ -85,6 +87,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     evaluationsCache,
     cacheEvaluationData,
     updateMarkInCache,
+    updateNoteInCache,
     resetCachedMarks,
     updateCachedSurveyStatus,
     invalidateCache,
@@ -111,6 +114,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   } | null>(cached?.training || null);
   const [players, setPlayers] = useState<EvaluationPlayer[]>(cached?.squad || []);
   const [marks, setMarks] = useState<Record<string, Mark>>(cached?.initialMarks || {});
+  const [notes, setNotes] = useState<Record<string, string>>(cached?.initialNotes || {});
   const [previousInjuries, setPreviousInjuries] = useState<Record<string, InjuryKind>>(
     cached?.previousInjuries || {}
   );
@@ -161,7 +165,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
       for (const item of queue) {
         try {
-          const res = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark);
+          const res = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark, item.note || "");
           if (!res.success) {
             failedTimestamps.add(item.timestamp);
           }
@@ -259,6 +263,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       const squad = res.squad as EvaluationPlayer[];
       const savedMarks = res.initialMarks || {};
       let queuedMarks: Record<string, Mark> = {};
+      let queuedNotes: Record<string, string> = {};
 
       try {
         const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
@@ -270,15 +275,23 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
             result[item.playerId] = item.mark;
             return result;
           }, {});
+        queuedNotes = queue.reduce<Record<string, string>>((result, item) => {
+          if (item.trainingId === trainingId && item.note !== undefined) {
+            result[item.playerId] = item.note;
+          }
+          return result;
+        }, {});
       } catch (storageError) {
         console.error("Nie udało się odtworzyć lokalnych ocen:", storageError);
       }
 
       const initialMarks = { ...savedMarks, ...queuedMarks };
+      const initialNotes = { ...(res.initialNotes || {}), ...queuedNotes };
 
       setTraining(res.training);
       setPlayers(squad);
       setMarks(initialMarks);
+      setNotes(initialNotes);
       setPreviousInjuries(res.previousInjuries || {});
       setDismissedInjuryPrompts({});
       setSurveySummary(res.surveySummary || null);
@@ -287,6 +300,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         training: res.training,
         squad,
         initialMarks,
+        initialNotes,
         previousInjuries: res.previousInjuries || {},
       });
 
@@ -352,6 +366,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     }
 
     const nextIndex = Math.min(index + 1, total);
+    const note = notes[player.id] || "";
 
     // 1. Natychmiastowy stan UI i cache Zustand
     setMarks((curr) => ({ ...curr, [player.id]: mark }));
@@ -359,6 +374,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     setSelectedAbsenceReason(null);
     setIndex(nextIndex);
     updateMarkInCache(trainingId, player.id, mark);
+    updateNoteInCache(trainingId, player.id, note);
 
     // 2. BR-021: Zapis pozycji sesji w pamięci urządzenia
     try {
@@ -370,6 +386,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       trainingId,
       playerId: player.id,
       mark,
+      note,
       timestamp: Date.now() + Math.random(),
     };
 
@@ -392,7 +409,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     }
 
     try {
-      const res = await savePlayerMarkAction(trainingId, player.id, mark);
+      const res = await savePlayerMarkAction(trainingId, player.id, mark, note);
       if (!res.success) {
         throw new Error(res.error || "Błąd zapisu");
       }
@@ -434,6 +451,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     const res = await resetTrainingEvaluationsAction(trainingId);
     if (res.success) {
       setMarks({});
+      setNotes({});
       setIndex(0);
       setAbsenceModalOpen(false);
       setSelectedAbsenceReason(null);
@@ -474,6 +492,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       setTraining(res.training);
       setPlayers(squad);
       setMarks(initialMarks);
+      setNotes(res.initialNotes || {});
       setPreviousInjuries(res.previousInjuries || {});
       setDismissedInjuryPrompts({});
       setSurveySummary(res.surveySummary || null);
@@ -482,6 +501,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         training: res.training,
         squad,
         initialMarks,
+        initialNotes: res.initialNotes || {},
         previousInjuries: res.previousInjuries || {},
       });
 
@@ -638,6 +658,32 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
                 setAbsenceModalOpen(true);
               }}
             />
+
+            <div className="mt-4 rounded-xl border border-foreground/15 bg-background p-3">
+              <label
+                htmlFor={`evaluation-note-${player.id}`}
+                className="mb-1.5 block text-xs font-bold uppercase text-muted-foreground"
+              >
+                Notatka do zawodnika
+              </label>
+              <VoiceTextInput
+                id={`evaluation-note-${player.id}`}
+                value={notes[player.id] || ""}
+                onChange={(note) => {
+                  setNotes((current) => ({ ...current, [player.id]: note }));
+                  updateNoteInCache(trainingId, player.id, note);
+                }}
+                placeholder="Dodaj obserwację lub podyktuj notatkę..."
+                ariaLabel={`Notatka do zawodnika ${playerName(player)}`}
+                multiline
+                rows={2}
+                disabled={!isOwner}
+                className="font-mono"
+              />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Notatka zapisze się razem z oceną lub statusem obecności.
+              </p>
+            </div>
 
             {isOwner &&
               !marks[player.id] &&

@@ -261,6 +261,12 @@ function PlayerAnalyticsContent() {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">{record.topic || "Trening bez tematu"}</p>
+                  {record.note && (
+                    <p className="mt-2 max-w-2xl whitespace-pre-wrap rounded-lg border border-foreground/10 bg-muted/40 p-2.5 text-xs text-foreground">
+                      <span className="font-bold uppercase tracking-wide text-muted-foreground">Notatka trenera: </span>
+                      {record.note}
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">

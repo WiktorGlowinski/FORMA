@@ -40,6 +40,7 @@ import {
 } from "@/app/actions/coach";
 import { useCoachStore } from "@/store/useCoachStore";
 import { cn } from "@/lib/utils";
+import { VoiceTextInput } from "@/components/ui/voice-text-input";
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: "Zaplanowany",
@@ -85,6 +86,7 @@ interface OfflineQueueItem {
   trainingId: string;
   playerId: string;
   mark: Mark;
+  note?: string;
   timestamp: number;
 }
 
@@ -97,6 +99,7 @@ function isOfflineQueueItem(value: unknown): value is OfflineQueueItem {
     typeof item.playerId === "string" &&
     typeof item.timestamp === "number" &&
     Number.isFinite(item.timestamp) &&
+    (item.note === undefined || typeof item.note === "string") &&
     Boolean(mark) &&
     (mark?.type === "score" || mark?.type === "absence")
   );
@@ -403,7 +406,12 @@ export function TrainingBoard() {
           const failedTimestamps = new Set<number>();
           for (const item of queue) {
             try {
-              const result = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark);
+              const result = await savePlayerMarkAction(
+                item.trainingId,
+                item.playerId,
+                item.mark,
+                item.note || ""
+              );
               if (!result.success) {
                 failedTimestamps.add(item.timestamp);
                 console.error("Automatyczny zapis oceny nie powiódł się:", result.error);
@@ -528,12 +536,12 @@ export function TrainingBoard() {
       return;
     }
 
-    setSubmitting(true);
     if (!fields.some((field) => field.id === fieldId)) {
       alert("Wybierz boisko z listy.");
       return;
     }
 
+    setSubmitting(true);
     const finalStart =
       timeMode === "preset"
         ? timeSlot.start
@@ -1544,34 +1552,36 @@ export function TrainingBoard() {
 
                 <div>
                   <label className="text-xs font-bold text-muted-foreground uppercase">Temat jednostki</label>
-                  <input
-                    type="text"
+                  <VoiceTextInput
                     value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
+                    onChange={setTopic}
                     placeholder="np. Gra w przewadze po odbiorze piłki"
-                    className="mt-1.5 h-11 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 text-xs outline-none focus:border-foreground"
+                    ariaLabel="Temat jednostki"
+                    className="mt-1.5"
                   />
                 </div>
 
                 <div>
                   <label className="text-xs font-bold text-muted-foreground uppercase">Cel główny mikrocyklu</label>
-                  <input
-                    type="text"
+                  <VoiceTextInput
                     value={mainGoal}
-                    onChange={(e) => setMainGoal(e.target.value)}
+                    onChange={setMainGoal}
                     placeholder="np. Poprawa szybkości reakcji w fazie negatywnej"
-                    className="mt-1.5 h-11 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 text-xs outline-none focus:border-foreground"
+                    ariaLabel="Cel główny mikrocyklu"
+                    className="mt-1.5"
                   />
                 </div>
 
                 <div>
                   <label className="text-xs font-bold text-muted-foreground uppercase">Notatka organizacyjna dla sztabu</label>
-                  <textarea
+                  <VoiceTextInput
+                    multiline
                     rows={2}
                     value={orgNote}
-                    onChange={(e) => setOrgNote(e.target.value)}
+                    onChange={setOrgNote}
                     placeholder="np. Małe bramki z magazynu; ochraniacze obowiązkowe"
-                    className="mt-1.5 w-full rounded-xl border-2 border-foreground/20 bg-background p-2.5 text-xs outline-none focus:border-foreground"
+                    ariaLabel="Notatka organizacyjna dla sztabu"
+                    className="mt-1.5"
                   />
                 </div>
               </div>

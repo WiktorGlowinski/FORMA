@@ -164,6 +164,10 @@
 | `created_at` | `timestamptz` |  |
 | `updated_at` | `timestamptz` |  |
 
+`comment` stores injury details as `Uraz: <kind>` and coach notes as
+`Notatka: <text>`, using separate lines when both are present. Coach notes are
+transcribed from speech in supported browsers or entered manually.
+
 ## Table `post_training_surveys`
 
 ### Columns
