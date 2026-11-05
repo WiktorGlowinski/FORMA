@@ -68,6 +68,91 @@ export interface CoachAlertItem {
   severity: "danger" | "warning";
 }
 
+async function canManageTrainingEvaluations(
+  userId: string,
+  training: {
+    club_id: string;
+    team_id: string;
+    lead_coach_id: string | null;
+  }
+) {
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .select("club_id, role, is_active")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profileError) throw profileError;
+  if (!profile || profile.is_active === false) return false;
+  if (profile.role === "master_admin") return true;
+  if (profile.club_id !== training.club_id) return false;
+  if (profile.role === "club_admin" || profile.role === "coordinator") return true;
+  if (training.lead_coach_id === userId) return true;
+  if (training.lead_coach_id !== null) return false;
+
+  const { data: assignment, error: assignmentError } = await supabaseAdmin
+    .from("team_coaches")
+    .select("id")
+    .eq("team_id", training.team_id)
+    .eq("coach_id", userId)
+    .is("revoked_at", null)
+    .maybeSingle();
+
+  if (assignmentError) throw assignmentError;
+  return Boolean(assignment);
+}
+
+async function canAccessTraining(
+  userId: string,
+  training: {
+    club_id: string;
+    team_id: string;
+    lead_coach_id: string | null;
+  }
+) {
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("profiles")
+    .select("club_id, role, is_active")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profileError) throw profileError;
+  if (!profile || profile.is_active === false) return false;
+  if (profile.role === "master_admin") return true;
+  if (profile.club_id !== training.club_id) return false;
+  if (profile.role === "club_admin" || profile.role === "coordinator") return true;
+  if (training.lead_coach_id === userId) return true;
+
+  const { data: assignment, error: assignmentError } = await supabaseAdmin
+    .from("team_coaches")
+    .select("id")
+    .eq("team_id", training.team_id)
+    .eq("coach_id", userId)
+    .is("revoked_at", null)
+    .maybeSingle();
+
+  if (assignmentError) throw assignmentError;
+  return Boolean(assignment);
+}
+
+async function getPendingSurveyLinks(trainingId: string) {
+  const { data: surveys, error } = await supabaseAdmin
+    .from("post_training_surveys")
+    .select("token, players!inner(first_name, last_name)")
+    .eq("training_id", trainingId)
+    .eq("is_completed", false)
+    .gt("expires_at", new Date().toISOString());
+
+  if (error) throw error;
+  return (surveys || []).map((survey: any) => {
+    const player = Array.isArray(survey.players) ? survey.players[0] : survey.players;
+    return {
+      playerName: `${player.first_name} ${player.last_name}`,
+      url: `/ankieta/${survey.token}`,
+    };
+  });
+}
+
 export interface GuestCandidatePlayer {
   id: string;
   firstName: string;
@@ -338,6 +423,7 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       .from("trainings")
       .select(`
         id,
+        club_id,
         date,
         start_time,
         end_time,
@@ -399,6 +485,13 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
     }
 
     const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
+    if (!(await canAccessTraining(user.id, {
+      club_id: training.club_id,
+      team_id: training.team_id,
+      lead_coach_id: training.lead_coach_id,
+    }))) {
+      return { success: false, error: "Brak uprawnień do jednostki treningowej." };
+    }
     const teamObj = Array.isArray(training.teams) ? training.teams[0] : training.teams;
 
     const guestEvaluations = (evalsRes.data || []).filter((e: any) => e.is_guest);
@@ -542,14 +635,39 @@ export async function savePlayerMarkAction(trainingId: string, playerId: string,
 
     const { data: tr } = await supabase
       .from("trainings")
-      .select("club_id, lead_coach_id, status")
+      .select("club_id, team_id, lead_coach_id, status")
       .eq("id", trainingId)
       .single();
 
     if (!tr) return { success: false, error: "Nie znaleziono jednostki." };
 
-    if (tr.lead_coach_id && tr.lead_coach_id !== user.id) {
+    if (!(await canManageTrainingEvaluations(user.id, tr))) {
       return { success: false, error: "Nie możesz modyfikować ocen w jednostce innego trenera." };
+    }
+
+    const [{ data: rosterPlayer, error: playerError }, { data: existingEvaluation, error: evaluationError }] =
+      await Promise.all([
+        supabaseAdmin
+          .from("players")
+          .select("id")
+          .eq("id", playerId)
+          .eq("club_id", tr.club_id)
+          .eq("current_team_id", tr.team_id)
+          .eq("is_active", true)
+          .maybeSingle(),
+        supabaseAdmin
+          .from("evaluations")
+          .select("player_id")
+          .eq("training_id", trainingId)
+          .eq("club_id", tr.club_id)
+          .eq("player_id", playerId)
+          .maybeSingle(),
+      ]);
+
+    if (playerError) throw playerError;
+    if (evaluationError) throw evaluationError;
+    if (!rosterPlayer && !existingEvaluation) {
+      return { success: false, error: "Zawodnik nie należy do składu tej jednostki." };
     }
 
     const isPresent = mark.type === "score";
@@ -559,7 +677,7 @@ export async function savePlayerMarkAction(trainingId: string, playerId: string,
       ? `Uraz: ${mark.injury}` 
       : null;
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from("evaluations")
       .upsert(
         {
@@ -579,13 +697,14 @@ export async function savePlayerMarkAction(trainingId: string, playerId: string,
     if (error) throw error;
 
     if (tr.status === "scheduled" || tr.status === "planned") {
-      await supabase
+      const { error: statusError } = await supabaseAdmin
         .from("trainings")
         .update({
           status: "completed",
           updated_at: new Date().toISOString(),
         })
         .eq("id", trainingId);
+      if (statusError) throw statusError;
     }
 
     return { success: true };
@@ -604,15 +723,16 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
 
     if (!user) return { success: false, error: "Brak autoryzacji." };
 
-    const { data: tr } = await supabase
+    const { data: tr, error: trainingError } = await supabase
       .from("trainings")
-      .select("lead_coach_id")
+      .select("club_id, team_id, lead_coach_id")
       .eq("id", trainingId)
       .single();
 
+    if (trainingError) throw trainingError;
     if (!tr) return { success: false, error: "Nie znaleziono jednostki." };
 
-    if (tr.lead_coach_id && tr.lead_coach_id !== user.id) {
+    if (!(await canManageTrainingEvaluations(user.id, tr))) {
       return { success: false, error: "Brak uprawnień do resetowania ocen w tym treningu." };
     }
 
@@ -641,36 +761,50 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     if (!user) return { success: false, error: "Brak autoryzacji." };
 
-    const { data: training, error: trErr } = await supabase
+    const { data: training, error: trErr } = await supabaseAdmin
       .from("trainings")
       .select("id, club_id, team_id, lead_coach_id, survey_enabled")
       .eq("id", trainingId)
-      .single();
+      .maybeSingle();
 
     if (trErr || !training) return { success: false, error: "Trening nie istnieje lub brak dostępu." };
 
-    if (training.survey_enabled) {
-      return {
-        success: true,
-        surveyUrl: `/ankieta/${trainingId}`,
-      };
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("club_id, role, is_active")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile || profile.is_active === false) {
+      return { success: false, error: "Brak uprawnień do jednostek tej drużyny." };
     }
 
-    const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
-    if (!isOwner) {
-      const { data: assignment } = await supabase
+    const isSameClub = profile.club_id === training.club_id;
+    const isPrivileged =
+      profile.role === "master_admin" ||
+      (isSameClub && (profile.role === "club_admin" || profile.role === "coordinator"));
+    let isAuthorized = isPrivileged || training.lead_coach_id === user.id;
+    if (!isAuthorized && isSameClub) {
+      const { data: assignment, error: assignmentError } = await supabaseAdmin
         .from("team_coaches")
         .select("id")
         .eq("team_id", training.team_id)
         .eq("coach_id", user.id)
+        .is("revoked_at", null)
         .maybeSingle();
-
-      if (!assignment) {
-        return { success: false, error: "Brak uprawnień do jednostek tej drużyny." };
-      }
+      if (assignmentError) throw assignmentError;
+      isAuthorized = Boolean(assignment);
     }
 
-    const { data: presentEvals, error: evErr } = await supabase
+    if (!isAuthorized) {
+      return { success: false, error: "Brak uprawnień do ankiety tej jednostki." };
+    }
+
+    if (training.survey_enabled) {
+      return { success: true, surveyUrls: await getPendingSurveyLinks(trainingId) };
+    }
+
+    const { data: presentEvals, error: evErr } = await supabaseAdmin
       .from("evaluations")
       .select("player_id")
       .eq("training_id", trainingId)
@@ -678,10 +812,19 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     if (evErr) throw evErr;
 
+    const { data: existingSurveys, error: existingError } = await supabaseAdmin
+      .from("post_training_surveys")
+      .select("player_id")
+      .eq("training_id", trainingId);
+    if (existingError) throw existingError;
+
+    const existingPlayerIds = new Set((existingSurveys || []).map((survey) => survey.player_id));
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 24);
 
-    const surveyRows = (presentEvals || []).map((e: any) => ({
+    const surveyRows = (presentEvals || [])
+      .filter((evaluation) => !existingPlayerIds.has(evaluation.player_id))
+      .map((e: any) => ({
       club_id: training.club_id,
       training_id: trainingId,
       player_id: e.player_id,
@@ -692,9 +835,10 @@ export async function enableTrainingSurveyAction(trainingId: string) {
     }));
 
     if (surveyRows.length > 0) {
-      await supabaseAdmin
+      const { error: insertError } = await supabaseAdmin
         .from("post_training_surveys")
-        .upsert(surveyRows, { onConflict: "training_id,player_id" });
+        .insert(surveyRows);
+      if (insertError) throw insertError;
     }
 
     const { error: updateErr } = await supabaseAdmin
@@ -713,7 +857,7 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     return {
       success: true,
-      surveyUrl: `/ankieta/${trainingId}`,
+      surveyUrls: await getPendingSurveyLinks(trainingId),
     };
   } catch (err: any) {
     return { success: false, error: err.message };
@@ -1073,11 +1217,14 @@ export async function addGuestPlayerToTrainingAction(
 
     const { data: training, error: tError } = await supabase
       .from("trainings")
-      .select("id, club_id, team_id, status, survey_enabled")
+      .select("id, club_id, team_id, lead_coach_id, status, survey_enabled")
       .eq("id", trainingId)
       .single();
 
     if (tError || !training) return { success: false, error: "Jednostka nie istnieje" };
+    if (!(await canManageTrainingEvaluations(user.id, training))) {
+      return { success: false, error: "Brak uprawnień do jednostki treningowej." };
+    }
     if (training.status === "cancelled") {
       return { success: false, error: "Nie można dodać zawodnika do odwołanego treningu" };
     }
@@ -1223,7 +1370,7 @@ export async function getTrainingSurveysStatusAction(trainingId: string): Promis
         fatigue: s.fatigue,
         satisfaction: s.satisfaction,
         feedbackNote: s.feedback_note || null,
-        surveyUrl: `${baseUrl}/ankieta/${trainingId}`,
+        surveyUrl: `${baseUrl}/ankieta/${s.token}`,
       };
     });
 
@@ -1264,7 +1411,11 @@ export async function getTrainingSurveysStatusAction(trainingId: string): Promis
       ? ` (${training.date}${training.topic ? ` - ${training.topic}` : ""})` 
       : "";
 
-    const shareText = `FORMA — Ankieta potreningowa${trainingHeader}\nLink do wypełnienia oceny samopoczucia:\n${baseUrl}/ankieta/${trainingId}\n\nLink ważny 24h.`;
+    const pendingSurveyLinks = surveys
+      .filter((survey) => !survey.isCompleted)
+      .map((survey) => `${survey.playerName}: ${survey.surveyUrl}`)
+      .join("\n");
+    const shareText = `FORMA — Ankieta potreningowa${trainingHeader}\n${pendingSurveyLinks || "Brak oczekujących ankiet."}\n\nLinki ważne 24h.`;
 
     return { success: true, surveys, summary, shareText };
   } catch (err: any) {

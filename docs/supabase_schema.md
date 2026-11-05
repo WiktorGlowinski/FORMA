@@ -219,6 +219,10 @@
 
 ## RLS Policies
 
+The policies below reflect the hardening migration in
+[`supabase/migrations/20261105160000_harden_club_rls_and_surveys.sql`](../supabase/migrations/20261105160000_harden_club_rls_and_surveys.sql).
+Apply that migration to the Supabase project; this documentation alone does not change deployed policies.
+
 ### `clubs`
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |
@@ -238,48 +242,48 @@
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |
 |--------|---------|-------|--------|-------|------------|
-| `Izolacja klubowa - seasons` | ALL | public | PERMISSIVE | `((club_id = get_auth_club_id()) OR (get_auth_role() = 'master_admin'::user_role))` | — |
+| `Members read club seasons` | SELECT | authenticated | PERMISSIVE | `(get_auth_role() = 'master_admin'::user_role OR club_id = get_auth_club_id())` | — |
+| `Club admins manage seasons` | ALL | authenticated | PERMISSIVE | `master_admin OR (same club AND role in club_admin/coordinator)` | Same as USING |
 
 ### `team_coaches`
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |
 |--------|---------|-------|--------|-------|------------|
-| `Izolacja klubowa - team_coaches` | ALL | public | PERMISSIVE | `((club_id = get_auth_club_id()) OR (get_auth_role() = 'master_admin'::user_role))` | — |
-| `Trener widzi swoje powiązania w team_coaches` | SELECT | authenticated | PERMISSIVE | `(coach_id = auth.uid())` | — |
+| `Staff and coaches read team assignments` | SELECT | authenticated | PERMISSIVE | `master_admin OR (same club AND coach_id = auth.uid()) OR (same club AND role in club_admin/coordinator)` | — |
+| `Club admins manage team assignments` | ALL | authenticated | PERMISSIVE | `master_admin OR (same club AND role in club_admin/coordinator)` | Same as USING |
 
 ### `player_team_history`
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |
 |--------|---------|-------|--------|-------|------------|
-| `Izolacja klubowa - player_team_history` | ALL | public | PERMISSIVE | `((club_id = get_auth_club_id()) OR (get_auth_role() = 'master_admin'::user_role))` | — |
+| `Staff read club player history` | SELECT | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR same-club assigned team coach` | — |
+| `Club admins manage player history` | ALL | authenticated | PERMISSIVE | `master_admin OR (same club AND role in club_admin/coordinator)` | Same as USING |
 
 ### `trainings`
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |
 |--------|---------|-------|--------|-------|------------|
-| `Izolacja klubowa - trainings` | ALL | public | PERMISSIVE | `((club_id = get_auth_club_id()) OR (get_auth_role() = 'master_admin'::user_role))` | — |
-| `Trener widzi jednostki swoich drużyn` | SELECT | authenticated | PERMISSIVE | `is_coach_of_team(team_id)` | — |
-| `Trener tworzy treningi dla swoich grup` | INSERT | authenticated | PERMISSIVE | — | `(is_coach_of_team(team_id) AND ((lead_coach_id IS NULL) OR (lead_coach_id = auth.uid())))` |
-| `Trener modyfikuje własne jednostki` | UPDATE | authenticated | PERMISSIVE | `is_coach_of_training(id)` | `is_coach_of_training(id)` |
+| `Staff and coaches read trainings` | SELECT | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR (same club AND is_coach_of_team(team_id))` | — |
+| `Staff and assigned coaches create trainings` | INSERT | authenticated | PERMISSIVE | — | `master_admin OR same-club admin/coordinator OR assigned coach in same club with lead null/self` |
+| `Staff and assigned coaches update trainings` | UPDATE | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR (same club AND is_coach_of_training(id))` | Same as USING |
 
 ### `evaluations`
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |
 |--------|---------|-------|--------|-------|------------|
-| `Izolacja klubowa - evaluations` | ALL | public | PERMISSIVE | `((club_id = get_auth_club_id()) OR (get_auth_role() = 'master_admin'::user_role))` | — |
-| `Trener odczytuje oceny swojego treningu` | SELECT | authenticated | PERMISSIVE | `is_coach_of_training(training_id)` | — |
-| `Trener zapisuje oceny dla swojego treningu` | INSERT | authenticated | PERMISSIVE | — | `(is_coach_of_training(training_id) AND (evaluator_id = auth.uid()))` |
-| `Trener aktualizuje oceny swojego treningu` | UPDATE | authenticated | PERMISSIVE | `(is_coach_of_training(training_id) AND (evaluator_id = auth.uid()))` | `(is_coach_of_training(training_id) AND (evaluator_id = auth.uid()))` |
-| `Trener może wyczyścić oceny swojego treningu` | DELETE | authenticated | PERMISSIVE | `is_coach_of_training(training_id)` | — |
+| `Staff and assigned coaches read evaluations` | SELECT | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR (same club AND is_coach_of_training(training_id))` | — |
+| `Staff and assigned coaches insert evaluations` | INSERT | authenticated | PERMISSIVE | — | `master_admin OR same-club admin/coordinator OR assigned coach with evaluator_id = auth.uid()` |
+| `Staff and assigned coaches update evaluations` | UPDATE | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR same-club assigned coach with evaluator_id = auth.uid()` | Same as USING |
+| `Staff and assigned coaches delete evaluations` | DELETE | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR (same club AND is_coach_of_training(training_id))` | — |
 
 ### `post_training_surveys`
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |
 |--------|---------|-------|--------|-------|------------|
-| `Klub ma wgląd do ankiet` | ALL | public | PERMISSIVE | `((club_id = get_auth_club_id()) OR (get_auth_role() = 'master_admin'::user_role))` | — |
-| `Publiczny odczyt ankiety przez token` | SELECT | anon | PERMISSIVE | `((token IS NOT NULL) AND (is_completed = false) AND (expires_at > now()))` | — |
-| `Publiczne wypełnienie ankiety przez token` | UPDATE | anon | PERMISSIVE | `((token IS NOT NULL) AND (is_completed = false) AND (expires_at > now()))` | `((is_completed = true) AND (completed_at IS NOT NULL) AND (fatigue IS NOT NULL) AND (satisfaction IS NOT NULL))` |
-| `Trener ma pełen dostęp do ankiet swojej jednostki` | ALL | authenticated | PERMISSIVE | `is_coach_of_training(training_id)` | `is_coach_of_training(training_id)` |
+| `Staff and assigned coaches read surveys` | SELECT | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR (same club AND is_coach_of_training(training_id))` | — |
+| `Staff and assigned coaches manage surveys` | ALL | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR (same club AND is_coach_of_training(training_id))` | Same as USING |
+
+Anonymous table privileges are revoked. Public survey access is performed only through server actions using an individual unguessable survey token; the token is not accepted as a direct table policy predicate.
 
 ### `audit_logs`
 
@@ -298,4 +302,3 @@
 | Policy | Command | Roles | Action | USING | WITH CHECK |
 |--------|---------|-------|--------|-------|------------|
 | `Staff can view club players` | SELECT | authenticated | PERMISSIVE | `((club_id = get_current_user_club_id()) OR (current_team_id IN ( SELECT teams.id    FROM teams   WHERE (teams.club_id = get_current_user_club_id()))))` | — |
-

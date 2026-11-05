@@ -26,12 +26,13 @@ import {
   Ban,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { formatTrainingDate } from "@/components/coach/data";
+import { formatTrainingDate, type Mark } from "@/components/coach/data";
 import {
   getCoachTrainingsAction,
   createTrainingAction,
   cancelTrainingAction,
   getCoachAlertsAction,
+  savePlayerMarkAction,
   type DbTrainingCard,
   type CoachAlertItem,
 } from "@/app/actions/coach";
@@ -83,6 +84,27 @@ function formatGuestBadge(count: number): string {
     return `+${count} goście`;
   }
   return `+${count} gości`;
+}
+
+interface OfflineQueueItem {
+  trainingId: string;
+  playerId: string;
+  mark: Mark;
+  timestamp: number;
+}
+
+function isOfflineQueueItem(value: unknown): value is OfflineQueueItem {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<OfflineQueueItem>;
+  const mark = item.mark;
+  return (
+    typeof item.trainingId === "string" &&
+    typeof item.playerId === "string" &&
+    typeof item.timestamp === "number" &&
+    Number.isFinite(item.timestamp) &&
+    Boolean(mark) &&
+    (mark?.type === "score" || mark?.type === "absence")
+  );
 }
 
 function getTodayLocalDate(): string {
@@ -326,14 +348,107 @@ export function TrainingBoard() {
       );
     }
 
+    let syncInProgress = false;
+
+    async function syncPendingEvaluations() {
+      if (!navigator.onLine || syncInProgress) return;
+      syncInProgress = true;
+      let hasSyncedEvaluations = false;
+      try {
+        const queueKeys = Array.from({ length: localStorage.length }, (_, index) =>
+          localStorage.key(index)
+        ).filter((key): key is string => Boolean(key?.startsWith("forma_eval_queue_")));
+
+        for (const key of queueKeys) {
+          const rawQueue = localStorage.getItem(key);
+          if (!rawQueue) continue;
+
+          let queue: OfflineQueueItem[];
+          try {
+            const parsed: unknown = JSON.parse(rawQueue);
+            if (!Array.isArray(parsed) || !parsed.every(isOfflineQueueItem)) {
+              console.error(`Nieprawidłowa kolejka ocen: ${key}`);
+              continue;
+            }
+            queue = parsed;
+          } catch (queueError) {
+            console.error(`Nie udało się odczytać kolejki ocen: ${key}`, queueError);
+            continue;
+          }
+
+          const attemptedTimestamps = new Set(queue.map((item) => item.timestamp));
+          const failedTimestamps = new Set<number>();
+          for (const item of queue) {
+            try {
+              const result = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark);
+              if (!result.success) {
+                failedTimestamps.add(item.timestamp);
+                console.error("Automatyczny zapis oceny nie powiódł się:", result.error);
+                continue;
+              }
+              hasSyncedEvaluations = true;
+            } catch (saveError) {
+              failedTimestamps.add(item.timestamp);
+              console.error("Automatyczny zapis oceny nie powiódł się:", saveError);
+            }
+          }
+
+          const latestRawQueue = localStorage.getItem(key);
+          const parsedLatest: unknown = latestRawQueue ? JSON.parse(latestRawQueue) : [];
+          if (!Array.isArray(parsedLatest) || !parsedLatest.every(isOfflineQueueItem)) {
+            console.error(`Nieprawidłowa kolejka ocen po synchronizacji: ${key}`);
+            continue;
+          }
+          const latestQueue: OfflineQueueItem[] = parsedLatest;
+          const remaining = latestQueue.filter(
+            (item) =>
+              !attemptedTimestamps.has(item.timestamp) || failedTimestamps.has(item.timestamp)
+          );
+          if (remaining.length > 0) {
+            localStorage.setItem(key, JSON.stringify(remaining));
+          } else {
+            localStorage.removeItem(key);
+          }
+        }
+        if (hasSyncedEvaluations) {
+          const result = await getCoachTrainingsAction();
+          if (result.success) {
+            setTrainingsData(result.currentCoachId, result.trainings, result.teams);
+          } else {
+            console.error("Nie udało się odświeżyć ocen po synchronizacji:", result.error);
+          }
+        }
+      } catch (syncError) {
+        console.error("Nie udało się zsynchronizować lokalnych ocen:", syncError);
+      } finally {
+        syncInProgress = false;
+        loadPendingEvaluationIds();
+      }
+    }
+
+    function handleQueueUpdate() {
+      loadPendingEvaluationIds();
+      void syncPendingEvaluations();
+    }
+    function handleVisible() {
+      if (document.visibilityState === "visible") void syncPendingEvaluations();
+    }
+
     loadPendingEvaluationIds();
-    window.addEventListener("forma-evaluation-queue-updated", loadPendingEvaluationIds);
+    void syncPendingEvaluations();
+    window.addEventListener("forma-evaluation-queue-updated", handleQueueUpdate);
     window.addEventListener("focus", loadPendingEvaluationIds);
+    window.addEventListener("online", handleQueueUpdate);
+    document.addEventListener("visibilitychange", handleVisible);
+    const retryTimer = window.setInterval(() => void syncPendingEvaluations(), 15000);
     return () => {
-      window.removeEventListener("forma-evaluation-queue-updated", loadPendingEvaluationIds);
+      window.removeEventListener("forma-evaluation-queue-updated", handleQueueUpdate);
       window.removeEventListener("focus", loadPendingEvaluationIds);
+      window.removeEventListener("online", handleQueueUpdate);
+      document.removeEventListener("visibilitychange", handleVisible);
+      window.clearInterval(retryTimer);
     };
-  }, []);
+  }, [setTrainingsData]);
 
   useEffect(() => {
     if (teams.length > 0 && !teamId) {
@@ -477,13 +592,13 @@ export function TrainingBoard() {
   const formattedEnd = calculateEndTime(customHour, customMinute, durationMinutes);
 
   const getEvaluatedCount = (t: DbTrainingCard) =>
-    Math.min(
+    Math.min(Math.max(
       new Set([
         ...(t.evaluatedPlayerIds || []),
         ...(pendingEvaluationIds[t.id] || []),
       ]).size,
-      t.totalPlayers
-    );
+      t.evaluatedCount
+    ), t.totalPlayers);
 
   const isFullyEvaluated = (t: DbTrainingCard) =>
     getEvaluatedCount(t) >= t.totalPlayers && t.totalPlayers > 0;

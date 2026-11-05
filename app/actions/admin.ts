@@ -14,15 +14,19 @@ async function requireAdmin() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("club_id, role, full_name")
+    .select("club_id, role, full_name, is_active")
     .eq("id", user.id)
     .maybeSingle();
 
-  if (!profile || (profile.role !== "club_admin" && profile.role !== "master_admin")) {
+  if (
+    !profile ||
+    profile.is_active === false ||
+    (profile.role !== "club_admin" && profile.role !== "master_admin")
+  ) {
     throw new Error("Brak uprawnień administratora klubu.");
   }
 
-  return { user, clubId: profile.club_id, adminName: profile.full_name };
+  return { user, clubId: profile.club_id, role: profile.role, adminName: profile.full_name };
 }
 
 /**
@@ -197,7 +201,22 @@ export async function updateCoachAction(payload: {
   isActive?: boolean;
 }) {
   try {
-    const { clubId } = await requireAdmin();
+    const { clubId, role } = await requireAdmin();
+
+    const { data: targetCoach, error: targetError } = await supabaseAdmin
+      .from("profiles")
+      .select("id, club_id, role")
+      .eq("id", payload.coachId)
+      .maybeSingle();
+
+    if (targetError) throw targetError;
+    if (
+      !targetCoach ||
+      targetCoach.role !== "coach" ||
+      (role !== "master_admin" && targetCoach.club_id !== clubId)
+    ) {
+      return { success: false, error: "Nie znaleziono trenera w zarządzanym klubie." };
+    }
 
     const fullName = payload.fullName.trim();
     const email = payload.email.trim().toLowerCase();
@@ -222,7 +241,7 @@ export async function updateCoachAction(payload: {
       return { success: false, error: `Błąd Supabase Auth: ${authErr.message}` };
     }
 
-    const { error: profileErr } = await supabaseAdmin
+    let profileUpdate = supabaseAdmin
       .from("profiles")
       .update({
         full_name: fullName,
@@ -232,8 +251,12 @@ export async function updateCoachAction(payload: {
         is_active: payload.isActive !== undefined ? payload.isActive : true,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", payload.coachId)
-      .eq("club_id", clubId);
+      .eq("id", payload.coachId);
+    if (role !== "master_admin") {
+      profileUpdate = profileUpdate.eq("club_id", clubId);
+    }
+
+    const { error: profileErr } = await profileUpdate;
 
     if (profileErr) {
       return { success: false, error: `Błąd bazy: ${profileErr.message}` };

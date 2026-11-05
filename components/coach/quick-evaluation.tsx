@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useCoachStore } from "@/store/useCoachStore";
 import Link from "next/link";
@@ -57,6 +57,11 @@ import {
 } from "@/app/actions/surveys";
 import { AddGuestPlayerModal } from "@/components/coach/add-guest-player-modal";
 import { cn } from "@/lib/utils";
+
+const subscribeToShareSupport = () => () => {};
+const getShareSupport = () =>
+  typeof navigator !== "undefined" && typeof navigator.share === "function";
+const getServerShareSupport = () => false;
 
 export type EvaluationPlayer = SquadPlayer & {
   avatarUrl?: string | null;
@@ -1146,9 +1151,14 @@ function Summary({
   onSurveyActivated: () => void;
 }) {
   const [surveyLoading, setSurveyLoading] = useState(false);
-  const [surveyLink, setSurveyLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [canShare, setCanShare] = useState(false);
+  const [surveyLinks, setSurveyLinks] = useState<Array<{ playerName: string; url: string }>>([]);
+  const [copiedSurveyUrl, setCopiedSurveyUrl] = useState<string | null>(null);
+  const [sharingSurveyUrl, setSharingSurveyUrl] = useState<string | null>(null);
+  const canShare = useSyncExternalStore(
+    subscribeToShareSupport,
+    getShareSupport,
+    getServerShareSupport
+  );
 
   const [inPersonOpen, setInPersonOpen] = useState(false);
   const [inPersonPlayers, setInPersonPlayers] = useState<Array<{ id: string; firstName: string; lastName: string; jerseyNumber: number | null; isGuest: boolean }>>([]);
@@ -1161,12 +1171,24 @@ function Summary({
   const [inPersonError, setInPersonError] = useState<string | null>(null);
 
   useEffect(() => {
-    setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function");
-
-    if (initialSurveyEnabled) {
-      setSurveyLink(`${window.location.origin}/ankieta/${trainingId}`);
+    if (initialSurveyEnabled && isOwner) {
+      let active = true;
+      enableTrainingSurveyAction(trainingId).then((result) => {
+        if (!active || !result.success || !result.surveyUrls) return;
+        setSurveyLinks(
+          result.surveyUrls.map((link) => ({
+            playerName: link.playerName,
+            url: `${window.location.origin}${link.url}`,
+          }))
+        );
+      }).catch((error) => {
+        console.error("Nie udało się pobrać linków ankiety:", error);
+      });
+      return () => {
+        active = false;
+      };
     }
-  }, [initialSurveyEnabled, trainingId]);
+  }, [initialSurveyEnabled, isOwner, trainingId]);
 
   useEffect(() => {
     if (!inPersonOpen) return;
@@ -1206,52 +1228,107 @@ function Summary({
       surveySummary.completedSurveys >= surveySummary.totalSurveys
   );
 
-  async function triggerNativeShare(url: string) {
-    if (typeof navigator !== "undefined" && navigator.share) {
-      try {
-        await navigator.share({
-          title: "FORMA — Ankieta potreningowa",
-          text: "Cześć! Prośba o wypełnienie krótkiej ankiety potreningowej RPE (zajmie 30 sekund):",
-          url: url,
-        });
-        return;
-      } catch (err: any) {
-        if (err.name === "AbortError") return;
-      }
-    }
-    await copyToClipboard(url);
-  }
-
-  async function copyToClipboard(url: string) {
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      try {
-        await navigator.clipboard.writeText(url);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2500);
-      } catch (err) {
-        console.error("Błąd kopiowania:", err);
-      }
+  async function copySurveyLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedSurveyUrl(url);
+      window.setTimeout(() => {
+        setCopiedSurveyUrl((currentUrl) => currentUrl === url ? null : currentUrl);
+      }, 2500);
+    } catch (error) {
+      console.error("Błąd kopiowania linku ankiety:", error);
+      alert("Nie udało się skopiować linku. Sprawdź uprawnienia przeglądarki do schowka.");
     }
   }
 
-  async function handleEnableAndShare() {
+  async function shareSurveyLink(link: { playerName: string; url: string }) {
+    if (!canShare) {
+      await copySurveyLink(link.url);
+      return;
+    }
+
+    setSharingSurveyUrl(link.url);
+    try {
+      await navigator.share({
+        title: "FORMA — Ankieta potreningowa",
+        text: `Cześć ${link.playerName}! Prośba o wypełnienie krótkiej ankiety potreningowej RPE (zajmie 30 sekund).`,
+        url: link.url,
+      });
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      console.error("Nie udało się udostępnić linku ankiety:", error);
+      await copySurveyLink(link.url);
+    } finally {
+      setSharingSurveyUrl(null);
+    }
+  }
+
+  function renderSurveyLinks() {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          Każdy link jest indywidualny. Udostępniaj go osobno właściwemu zawodnikowi.
+        </p>
+        <ul className="max-h-72 space-y-2 overflow-y-auto overscroll-contain pr-1">
+          {surveyLinks.map((link) => (
+            <li
+              key={link.url}
+              className="flex flex-col gap-2 rounded-xl border border-foreground/15 bg-background p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <span className="min-w-0 truncate text-sm font-semibold">{link.playerName}</span>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  disabled={sharingSurveyUrl !== null}
+                  onClick={() => shareSurveyLink(link)}
+                  className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground transition hover:opacity-90 disabled:opacity-50 sm:flex-none"
+                >
+                  <Share2 className="size-4" />
+                  {sharingSurveyUrl === link.url ? "Otwieram..." : canShare ? "Wyślij" : "Kopiuj"}
+                </button>
+                {canShare && (
+                  <button
+                    type="button"
+                    onClick={() => copySurveyLink(link.url)}
+                    className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-foreground/20 px-3 text-xs font-bold transition hover:bg-muted sm:flex-none"
+                  >
+                    {copiedSurveyUrl === link.url
+                      ? <Check className="size-4 text-emerald-600" />
+                      : <ClipboardCopy className="size-4" />}
+                    {copiedSurveyUrl === link.url ? "Skopiowano" : "Kopiuj"}
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
+  async function handleEnableSurvey() {
     setSurveyLoading(true);
-    const res = await enableTrainingSurveyAction(trainingId);
+    try {
+      const res = await enableTrainingSurveyAction(trainingId);
 
-    if (res.success && res.surveyUrl) {
-      const fullUrl = `${window.location.origin}${res.surveyUrl}`;
-      setSurveyLink(fullUrl);
-      setSurveyLoading(false);
-      onSurveyActivated();
-
-      if (canShare) {
-        await triggerNativeShare(fullUrl);
+      if (res.success && res.surveyUrls) {
+        const links = res.surveyUrls.map((link) => ({
+          playerName: link.playerName,
+          url: `${window.location.origin}${link.url}`,
+        }));
+        setSurveyLinks(links);
+        onSurveyActivated();
+        if (links.length === 0) {
+          alert("Nie ma już oczekujących ankiet do udostępnienia.");
+        }
       } else {
-        await copyToClipboard(fullUrl);
+        alert(res.error || "Nie udało się aktywować ankiety.");
       }
-    } else {
+    } catch (error) {
+      console.error("Nie udało się przygotować ankiet:", error);
+      alert("Nie udało się przygotować linków do ankiet.");
+    } finally {
       setSurveyLoading(false);
-      alert(res.error || "Nie udało się aktywować ankiety.");
     }
   }
 
@@ -1678,55 +1755,17 @@ function Summary({
             </span>
           </div>
 
-          {surveyLink ? (
-            <div className="mt-4 space-y-3">
-              <div className="flex flex-col sm:flex-row gap-2.5">
-                {canShare && (
-                  <button
-                    type="button"
-                    onClick={() => triggerNativeShare(surveyLink)}
-                    className="flex-1 flex items-center justify-center gap-2 h-12 rounded-xl bg-primary text-primary-foreground font-heading text-xs uppercase tracking-wider shadow-[2px_2px_0_0_var(--foreground)] active:scale-95 transition-all"
-                  >
-                    <Share2 className="size-4" />
-                    <span>Wyślij (WhatsApp / SMS / Inne)</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(surveyLink)}
-                  className={cn(
-                    "flex items-center justify-center gap-2 h-12 px-5 rounded-xl border-2 font-heading text-xs uppercase tracking-wider shadow-[2px_2px_0_0_var(--foreground)] active:scale-95 transition-all",
-                    canShare ? "sm:w-auto" : "w-full",
-                    copied
-                      ? "border-emerald-600 bg-emerald-600 text-white"
-                      : "border-foreground/20 bg-card hover:bg-muted text-foreground"
-                  )}
-                >
-                  {copied ? <Check className="size-4 stroke-[3]" /> : <ClipboardCopy className="size-4" />}
-                  <span>{copied ? "Skopiowano do schowka!" : "Kopiuj link"}</span>
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2 rounded-xl border-2 border-foreground/15 bg-background p-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={surveyLink}
-                  onClick={(e) => (e.target as HTMLInputElement).select()}
-                  className="flex-1 bg-transparent px-2 font-mono text-xs text-foreground outline-none select-all truncate"
-                />
-              </div>
-            </div>
+          {surveyLinks.length > 0 ? (
+            <div className="mt-4">{renderSurveyLinks()}</div>
           ) : (
             <button
               type="button"
               disabled={surveyLoading}
-              onClick={handleEnableAndShare}
+              onClick={handleEnableSurvey}
               className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-primary-foreground font-heading text-xs uppercase tracking-wider shadow-[3px_3px_0_0_var(--foreground)] active:scale-95 transition-all disabled:opacity-50"
             >
               <Share2 className="size-4" />
-              <span>{surveyLoading ? "Aktywowanie ankiety..." : "Udostępnij ankietę zawodnikom"}</span>
+              <span>{surveyLoading ? "Przygotowuję linki..." : "Przygotuj indywidualne linki"}</span>
             </button>
           )}
         </div>
@@ -1734,38 +1773,18 @@ function Summary({
 
       {isOwner && surveySummary && surveySummary.completedSurveys > 0 &&
         !surveySummary.isExpired && !surveyComplete && (
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            {surveyLink ? (
-              <>
-                {canShare && (
-                  <Button
-                    type="button"
-                    onClick={() => triggerNativeShare(surveyLink)}
-                    className="h-11 flex-1 text-xs font-bold"
-                  >
-                    <Share2 className="mr-1.5 size-4" />
-                    Wyślij link do pozostałych
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => copyToClipboard(surveyLink)}
-                  className="h-11 text-xs font-bold"
-                >
-                  {copied ? <Check className="mr-1.5 size-4" /> : <ClipboardCopy className="mr-1.5 size-4" />}
-                  {copied ? "Skopiowano" : "Kopiuj link"}
-                </Button>
-              </>
+          <div className="mt-3">
+            {surveyLinks.length > 0 ? (
+              renderSurveyLinks()
             ) : (
               <Button
                 type="button"
                 disabled={surveyLoading}
-                onClick={handleEnableAndShare}
+                onClick={handleEnableSurvey}
                 className="h-11 text-xs font-bold"
               >
                 <Share2 className="mr-1.5 size-4" />
-                {surveyLoading ? "Aktywuję ankietę..." : "Udostępnij link pozostałym"}
+                {surveyLoading ? "Przygotowuję linki..." : "Pobierz linki dla pozostałych"}
               </Button>
             )}
           </div>
