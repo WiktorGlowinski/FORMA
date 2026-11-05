@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useCoachStore } from "@/store/useCoachStore";
 import Link from "next/link";
 import {
@@ -28,6 +29,8 @@ import {
   CloudCheck,
   CloudOff,
   RefreshCw,
+  CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -48,6 +51,10 @@ import {
   enableTrainingSurveyAction,
   type SurveySummary,
 } from "@/app/actions/coach";
+import {
+  getTrainingSurveySession,
+  submitInPersonSurveyResponse,
+} from "@/app/actions/surveys";
 import { AddGuestPlayerModal } from "@/components/coach/add-guest-player-modal";
 import { cn } from "@/lib/utils";
 
@@ -102,6 +109,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   // BR-021: Stany synchronizacji i odporności offline
   const [syncStatus, setSyncStatus] = useState<"synced" | "offline" | "syncing">("synced");
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
+  const flushInProgressRef = useRef(false);
 
   const [absenceModalOpen, setAbsenceModalOpen] = useState(false);
   const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<AbsenceReason | null>(null);
@@ -118,6 +126,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   // BR-021: Automatyczne opróżnianie kolejki offline po powrocie połączenia
   const flushOfflineQueue = useCallback(async () => {
     if (typeof window === "undefined") return;
+    if (flushInProgressRef.current) return;
     const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
     if (!rawQueue) {
       setPendingQueueCount(0);
@@ -133,29 +142,42 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         return;
       }
 
+      flushInProgressRef.current = true;
       setSyncStatus("syncing");
-      const remaining: OfflineQueueItem[] = [];
+      const attemptedTimestamps = new Set(queue.map((item) => item.timestamp));
+      const failedTimestamps = new Set<number>();
 
       for (const item of queue) {
         try {
           const res = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark);
-          if (!res.success) remaining.push(item);
+          if (!res.success) {
+            failedTimestamps.add(item.timestamp);
+          }
         } catch {
-          remaining.push(item);
+          failedTimestamps.add(item.timestamp);
         }
       }
 
-      if (remaining.length > 0) {
-        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(remaining));
-        setPendingQueueCount(remaining.length);
+      const rawLatestQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
+      const latestQueue: OfflineQueueItem[] = rawLatestQueue ? JSON.parse(rawLatestQueue) : [];
+      const queueToKeep = latestQueue.filter(
+        (item) => !attemptedTimestamps.has(item.timestamp) || failedTimestamps.has(item.timestamp)
+      );
+
+      if (queueToKeep.length > 0) {
+        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queueToKeep));
+        setPendingQueueCount(queueToKeep.length);
         setSyncStatus("offline");
       } else {
         localStorage.removeItem(STORAGE_KEY_QUEUE);
         setPendingQueueCount(0);
         setSyncStatus("synced");
       }
+      window.dispatchEvent(new Event("forma-evaluation-queue-updated"));
     } catch {
       setSyncStatus("offline");
+    } finally {
+      flushInProgressRef.current = false;
     }
   }, [trainingId, STORAGE_KEY_QUEUE]);
 
@@ -167,9 +189,18 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     function handleOffline() {
       setSyncStatus("offline");
     }
+    function handleVisible() {
+      if (document.visibilityState === "visible" && navigator.onLine) {
+        flushOfflineQueue();
+      }
+    }
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+    document.addEventListener("visibilitychange", handleVisible);
+    const retryTimer = window.setInterval(() => {
+      if (navigator.onLine) flushOfflineQueue();
+    }, 15000);
 
     // Sprawdzenie czy w buforze czekają niezsynchronizowane wpisy
     const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
@@ -186,6 +217,8 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
+      document.removeEventListener("visibilitychange", handleVisible);
+      window.clearInterval(retryTimer);
     };
   }, [flushOfflineQueue, STORAGE_KEY_QUEUE]);
 
@@ -209,7 +242,24 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       }
     } else if (res.training && res.squad) {
       const squad = res.squad as EvaluationPlayer[];
-      const initialMarks = res.initialMarks || {};
+      const savedMarks = res.initialMarks || {};
+      let queuedMarks: Record<string, Mark> = {};
+
+      try {
+        const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
+        const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
+        queuedMarks = queue
+          .filter((item) => item.trainingId === trainingId)
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .reduce<Record<string, Mark>>((result, item) => {
+            result[item.playerId] = item.mark;
+            return result;
+          }, {});
+      } catch (storageError) {
+        console.error("Nie udało się odtworzyć lokalnych ocen:", storageError);
+      }
+
+      const initialMarks = { ...savedMarks, ...queuedMarks };
 
       setTraining(res.training);
       setPlayers(squad);
@@ -292,28 +342,60 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       localStorage.setItem(STORAGE_KEY_INDEX, nextIndex.toString());
     } catch {}
 
-    // 3. Wysłanie na serwer lub do kolejki offline w razie braku sieci
+    // Zapisz oczekującą ocenę przed żądaniem, żeby zamknięcie karty jej nie zgubiło.
+    const queueItem: OfflineQueueItem = {
+      trainingId,
+      playerId: player.id,
+      mark,
+      timestamp: Date.now() + Math.random(),
+    };
+
+    try {
+      const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
+      const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
+      queue.push(queueItem);
+      localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queue));
+      window.dispatchEvent(new Event("forma-evaluation-queue-updated"));
+      setPendingQueueCount(queue.length);
+      if (!navigator.onLine) {
+        setSyncStatus("offline");
+        return;
+      }
+      setSyncStatus("syncing");
+    } catch (error) {
+      console.error("Nie udało się zabezpieczyć oceny lokalnie:", error);
+      alert("Nie udało się zapisać oceny na tym urządzeniu. Sprawdź wolne miejsce w przeglądarce i połączenie, a następnie spróbuj ponownie.");
+      return;
+    }
+
     try {
       const res = await savePlayerMarkAction(trainingId, player.id, mark);
       if (!res.success) {
         throw new Error(res.error || "Błąd zapisu");
       }
-      setSyncStatus("synced");
-    } catch {
-      // Zapisujemy do kolejki w localStorage na wypadek utraty zasięgu
+      const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
+      const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
+      const remaining = queue.filter((item) => item.timestamp !== queueItem.timestamp);
+      if (remaining.length > 0) {
+        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(remaining));
+      } else {
+        localStorage.removeItem(STORAGE_KEY_QUEUE);
+      }
+      window.dispatchEvent(new Event("forma-evaluation-queue-updated"));
+      setPendingQueueCount(remaining.length);
+      setSyncStatus(remaining.length > 0 ? "offline" : "synced");
+    } catch (error) {
+      console.error("Ocena czeka na synchronizację:", error);
       try {
         const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
-        const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
-        queue.push({
-          trainingId,
-          playerId: player.id,
-          mark,
-          timestamp: Date.now(),
-        });
-        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queue));
+        const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [queueItem];
         setPendingQueueCount(queue.length);
         setSyncStatus("offline");
-      } catch {}
+      } catch (storageError) {
+        console.error("Nie udało się odczytać lokalnej kolejki ocen:", storageError);
+        setPendingQueueCount(1);
+        setSyncStatus("offline");
+      }
     }
   }
 
@@ -338,6 +420,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       try {
         localStorage.removeItem(STORAGE_KEY_INDEX);
         localStorage.removeItem(STORAGE_KEY_QUEUE);
+        window.dispatchEvent(new Event("forma-evaluation-queue-updated"));
         setPendingQueueCount(0);
         setSyncStatus("synced");
       } catch {}
@@ -408,15 +491,14 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
               <span>Zapisuję...</span>
             </span>
           ) : syncStatus === "offline" ? (
-            <button
-              type="button"
-              onClick={flushOfflineQueue}
-              className="flex items-center gap-1 rounded-md bg-amber-500/15 border border-amber-600/30 px-2 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300"
-              title="Czeka na połączenie z siecią. Kliknij, aby ponowić próbę."
+            <span
+              className="flex items-center gap-1 rounded-md border border-amber-600/30 bg-amber-500/15 px-2 py-1 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300"
+              title="Oceny są zachowane lokalnie i będą synchronizowane automatycznie po przywróceniu połączenia."
+              aria-live="polite"
             >
               <CloudOff className="size-3" />
-              <span>Offline ({pendingQueueCount})</span>
-            </button>
+              <span>{pendingQueueCount > 0 ? `Oczekuje na zapis (${pendingQueueCount})` : "Brak sieci"}</span>
+            </span>
           ) : (
             <span className="hidden sm:flex items-center gap-1 font-mono text-[10px] text-muted-foreground/80">
               <CloudCheck className="size-3 text-emerald-600" />
@@ -1068,6 +1150,16 @@ function Summary({
   const [copied, setCopied] = useState(false);
   const [canShare, setCanShare] = useState(false);
 
+  const [inPersonOpen, setInPersonOpen] = useState(false);
+  const [inPersonPlayers, setInPersonPlayers] = useState<Array<{ id: string; firstName: string; lastName: string; jerseyNumber: number | null; isGuest: boolean }>>([]);
+  const [inPersonPlayerId, setInPersonPlayerId] = useState("");
+  const [inPersonLoading, setInPersonLoading] = useState(false);
+  const [inPersonFatigue, setInPersonFatigue] = useState(3);
+  const [inPersonSatisfaction, setInPersonSatisfaction] = useState(4);
+  const [inPersonNote, setInPersonNote] = useState("");
+  const [inPersonSubmitting, setInPersonSubmitting] = useState(false);
+  const [inPersonError, setInPersonError] = useState<string | null>(null);
+
   useEffect(() => {
     setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function");
 
@@ -1075,6 +1167,26 @@ function Summary({
       setSurveyLink(`${window.location.origin}/ankieta/${trainingId}`);
     }
   }, [initialSurveyEnabled, trainingId]);
+
+  useEffect(() => {
+    if (!inPersonOpen) return;
+
+    const bodyOverflow = document.body.style.overflow;
+    const htmlOverflow = document.documentElement.style.overflow;
+    const bodyPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+
+    return () => {
+      document.body.style.overflow = bodyOverflow;
+      document.documentElement.style.overflow = htmlOverflow;
+      document.body.style.paddingRight = bodyPaddingRight;
+    };
+  }, [inPersonOpen]);
 
   const counts = players.reduce(
     (acc, player) => {
@@ -1087,6 +1199,11 @@ function Summary({
       return acc;
     },
     { minus: 0, zero: 0, plus: 0, absent: 0, missing: 0 }
+  );
+  const surveyComplete = Boolean(
+    surveySummary &&
+      surveySummary.totalSurveys > 0 &&
+      surveySummary.completedSurveys >= surveySummary.totalSurveys
   );
 
   async function triggerNativeShare(url: string) {
@@ -1138,8 +1255,264 @@ function Summary({
     }
   }
 
+  async function handleOpenInPersonSurvey() {
+    setInPersonError(null);
+    setInPersonOpen(true);
+    setInPersonLoading(true);
+    setInPersonSubmitting(false);
+
+    const enableResult = await enableTrainingSurveyAction(trainingId);
+    if (!enableResult.success) {
+      setInPersonOpen(false);
+      setInPersonLoading(false);
+      alert(enableResult.error || "Nie udało się przygotować ankiety na miejscu.");
+      return;
+    }
+
+    const res = await getTrainingSurveySession(trainingId);
+    setInPersonLoading(false);
+    if (!res.success || !res.data) {
+      setInPersonOpen(false);
+      alert(res.error || "Nie udało się otworzyć ankiety na miejscu.");
+      return;
+    }
+
+    setInPersonPlayers(res.data.pendingPlayers);
+    if (res.data.pendingPlayers.length > 0) {
+      setInPersonPlayerId(res.data.pendingPlayers[0].id);
+    } else {
+      setInPersonPlayerId("");
+    }
+  }
+
+  async function handleSubmitInPersonSurvey(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!inPersonPlayerId) {
+      setInPersonError("Wybierz zawodnika.");
+      return;
+    }
+
+    setInPersonSubmitting(true);
+    setInPersonError(null);
+
+    const res = await submitInPersonSurveyResponse({
+      trainingId,
+      playerId: inPersonPlayerId,
+      fatigue: inPersonFatigue,
+      satisfaction: inPersonSatisfaction,
+      feedbackNote: inPersonNote,
+    });
+
+    setInPersonSubmitting(false);
+
+    if (!res.success) {
+      setInPersonError(res.error || "Nie udało się zapisać odpowiedzi.");
+      return;
+    }
+
+    const remainingPlayers = inPersonPlayers.filter((player) => player.id !== inPersonPlayerId);
+    if (remainingPlayers.length === 0) {
+      setInPersonOpen(false);
+      onSurveyActivated();
+      return;
+    }
+
+    setInPersonPlayers(remainingPlayers);
+    setInPersonPlayerId(remainingPlayers[0].id);
+    setInPersonFatigue(3);
+    setInPersonSatisfaction(4);
+    setInPersonNote("");
+    onSurveyActivated();
+  }
+
   return (
-    <div className="step-in p-4 sm:p-8">
+    <>
+      {inPersonOpen && createPortal(
+        <div className="fixed inset-0 z-50 overflow-hidden overscroll-contain bg-background/98 p-0 backdrop-blur-md animate-in fade-in duration-200 sm:p-6">
+          <div className="mx-auto flex h-full max-h-dvh w-full max-w-lg flex-col overflow-hidden bg-background shadow-[0_20px_60px_rgba(0,0,0,0.2)] sm:rounded-2xl sm:border sm:border-foreground/10">
+            <div className="border-b bg-background px-4 pb-3 pt-4 sm:px-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-mono text-xs font-bold text-primary">
+                    ANKIETA NA MIEJSCU
+                  </p>
+                  <h3 className="mt-1 font-heading text-lg uppercase tracking-wide">
+                    Ocena po treningu
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInPersonOpen(false)}
+                  className="shrink-0 rounded-full border-2 border-foreground/20 p-1.5 hover:bg-muted"
+                  aria-label="Zamknij ankietę na miejscu"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="mt-3 h-1.5 rounded-full bg-muted">
+                <div className="h-full w-full rounded-full bg-primary" />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">
+              {inPersonLoading ? (
+                <p className="py-8 text-center text-sm font-semibold text-muted-foreground">Przygotowuję ankietę...</p>
+              ) : inPersonPlayers.length === 0 ? (
+                <div className="my-auto rounded-xl border-2 border-primary/30 bg-primary/5 p-5 text-center">
+                  <CheckCircle2 className="mx-auto size-9 text-primary" />
+                  <p className="mt-3 font-heading text-lg uppercase">Wszystkie ankiety wypełnione</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Brak zawodników oczekujących na odpowiedź.</p>
+                </div>
+              ) : (
+                <form id="in-person-survey-form" className="space-y-4" onSubmit={handleSubmitInPersonSurvey}>
+                  <div className="rounded-xl border-2 border-primary/30 bg-primary/5 p-3.5 text-xs text-muted-foreground">
+                    <p className="flex items-center gap-1.5 font-bold text-primary">
+                      <Sparkles className="size-4" /> Wypełnijcie ankietę po kolei
+                    </p>
+                    <p className="mt-1">
+                      Zawodnik wybiera swoje nazwisko i sam zaznacza odpowiedzi. Pozostało:{" "}
+                      <strong className="text-foreground">{inPersonPlayers.length}</strong>.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label htmlFor="in-person-player" className="text-xs font-bold uppercase text-muted-foreground">
+                      Kto teraz wypełnia ankietę?
+                    </label>
+                    <select
+                      id="in-person-player"
+                      value={inPersonPlayerId}
+                      onChange={(e) => {
+                        setInPersonPlayerId(e.target.value);
+                        setInPersonFatigue(3);
+                        setInPersonSatisfaction(4);
+                        setInPersonNote("");
+                        setInPersonError(null);
+                      }}
+                      className="mt-2 h-12 w-full min-w-0 rounded-xl border-2 border-foreground/20 bg-background px-3 text-sm outline-none focus:border-foreground"
+                    >
+                      {inPersonPlayers.map((player) => (
+                        <option key={player.id} value={player.id}>
+                          {player.jerseyNumber !== null ? `#${player.jerseyNumber} ` : ""}{player.firstName} {player.lastName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <fieldset>
+                    <legend className="text-xs font-bold uppercase text-muted-foreground">
+                      Jak bardzo jesteś zmęczony/a?
+                    </legend>
+                    <div className="mt-2 grid grid-cols-5 gap-2">
+                      {[1, 2, 3, 4, 5].map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={inPersonFatigue === value}
+                          onClick={() => setInPersonFatigue(value)}
+                          className={cn(
+                            "flex h-14 min-w-0 flex-col items-center justify-center rounded-xl border-2 transition active:scale-95",
+                            inPersonFatigue === value
+                              ? "border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)]"
+                              : "border-foreground/15 bg-card hover:border-foreground/40"
+                          )}
+                        >
+                          <span className="font-heading text-xl font-bold leading-none">{value}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                      <span>Bardzo mało</span>
+                      <span>Bardzo dużo</span>
+                    </div>
+                  </fieldset>
+
+                  <fieldset>
+                    <legend className="text-xs font-bold uppercase text-muted-foreground">
+                      Jak oceniasz trening?
+                    </legend>
+                    <div className="mt-2 grid grid-cols-5 gap-2">
+                      {[1, 2, 3, 4, 5].map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={inPersonSatisfaction === value}
+                          onClick={() => setInPersonSatisfaction(value)}
+                          className={cn(
+                            "flex h-14 min-w-0 flex-col items-center justify-center rounded-xl border-2 transition active:scale-95",
+                            inPersonSatisfaction === value
+                              ? "border-foreground bg-secondary shadow-[2px_2px_0_0_var(--foreground)]"
+                              : "border-foreground/15 bg-card hover:border-foreground/40"
+                          )}
+                        >
+                          <span className="font-heading text-xl font-bold leading-none">{value}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                      <span>Bardzo słabo</span>
+                      <span>Świetnie</span>
+                    </div>
+                  </fieldset>
+
+                  <div>
+                    <label htmlFor="in-person-note" className="text-xs font-bold uppercase text-muted-foreground">
+                      Dodatkowa uwaga <span className="font-normal normal-case">(opcjonalnie)</span>
+                    </label>
+                    <textarea
+                      id="in-person-note"
+                      value={inPersonNote}
+                      onChange={(e) => setInPersonNote(e.target.value)}
+                      rows={2}
+                      placeholder="Co było najważniejsze?"
+                      className="mt-2 w-full resize-y rounded-xl border-2 border-foreground/20 bg-background px-3 py-2 text-sm outline-none focus:border-foreground"
+                    />
+                  </div>
+
+                  {inPersonError && (
+                    <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive">
+                      {inPersonError}
+                    </p>
+                  )}
+                </form>
+              )}
+            </div>
+
+            <div className="border-t bg-background px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-5">
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-12 px-3 text-xs text-muted-foreground"
+                  onClick={() => setInPersonOpen(false)}
+                  disabled={inPersonSubmitting}
+                >
+                  Anuluj
+                </Button>
+                {inPersonPlayers.length > 0 && !inPersonLoading && (
+                  <Button
+                    type="submit"
+                    form="in-person-survey-form"
+                    disabled={inPersonSubmitting}
+                    className="h-12 flex-1 text-xs font-bold shadow-[2px_2px_0_0_var(--foreground)]"
+                  >
+                    {inPersonSubmitting
+                      ? "Zapisuję..."
+                      : inPersonPlayers.length > 1
+                        ? "Zapisz i następny"
+                        : "Zapisz odpowiedź"}
+                    {!inPersonSubmitting && <ArrowRight className="ml-1 size-4" />}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      <div className="step-in p-4 sm:p-8">
       <p className="text-xs font-bold tracking-widest text-primary uppercase">Protokół zamknięty</p>
       <h2 className="mt-1 font-heading text-3xl tracking-tight sm:text-4xl">Wszyscy zawodnicy ocenieni.</h2>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -1165,7 +1538,21 @@ function Summary({
         </div>
       </dl>
 
-      {surveySummary && surveySummary.isExpired ? (
+      {isOwner && !surveyComplete && !surveySummary?.isExpired && (
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleOpenInPersonSurvey}
+            disabled={inPersonLoading}
+            className="inline-flex items-center gap-2 rounded-xl border-2 border-foreground bg-primary px-3.5 py-2 text-[11px] font-bold uppercase tracking-wider text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] transition active:scale-95"
+          >
+            <Smile className="size-4" />
+            {inPersonLoading ? "Otwieram ankietę..." : "Ankieta na miejscu"}
+          </button>
+        </div>
+      )}
+
+      {surveySummary && (surveySummary.isExpired || surveySummary.completedSurveys > 0) ? (
         <div className="mt-5 rounded-2xl border-2 border-foreground/20 bg-card p-4 sm:p-5 shadow-[3px_3px_0_0_var(--foreground)] space-y-4 animate-in fade-in duration-200">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/80 pb-3">
             <div className="flex items-center gap-2">
@@ -1177,12 +1564,20 @@ function Summary({
                   Podsumowanie ankiet RPE
                 </h3>
                 <p className="font-mono text-[11px] text-muted-foreground">
-                  Termin 24h minął · Zarchiwizowane wyniki
+                  {surveySummary.isExpired
+                    ? "Termin 24h minął · Zarchiwizowane wyniki"
+                    : "Aktualne odpowiedzi zawodników"}
                 </p>
               </div>
             </div>
-            <span className="rounded-md border border-foreground/15 bg-muted/60 px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-              <Clock className="size-3" /> Wygasła
+            <span className={cn(
+              "flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider",
+              surveySummary.isExpired
+                ? "border-foreground/15 bg-muted/60 text-muted-foreground"
+                : "border-primary/20 bg-primary/10 text-primary"
+            )}>
+              {surveySummary.isExpired && <Clock className="size-3" />}
+              {surveySummary.isExpired ? "Wygasła" : `${surveySummary.completedSurveys}/${surveySummary.totalSurveys} odpowiedzi`}
             </span>
           </div>
 
@@ -1337,6 +1732,45 @@ function Summary({
         </div>
       )}
 
+      {isOwner && surveySummary && surveySummary.completedSurveys > 0 &&
+        !surveySummary.isExpired && !surveyComplete && (
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            {surveyLink ? (
+              <>
+                {canShare && (
+                  <Button
+                    type="button"
+                    onClick={() => triggerNativeShare(surveyLink)}
+                    className="h-11 flex-1 text-xs font-bold"
+                  >
+                    <Share2 className="mr-1.5 size-4" />
+                    Wyślij link do pozostałych
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => copyToClipboard(surveyLink)}
+                  className="h-11 text-xs font-bold"
+                >
+                  {copied ? <Check className="mr-1.5 size-4" /> : <ClipboardCopy className="mr-1.5 size-4" />}
+                  {copied ? "Skopiowano" : "Kopiuj link"}
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                disabled={surveyLoading}
+                onClick={handleEnableAndShare}
+                className="h-11 text-xs font-bold"
+              >
+                <Share2 className="mr-1.5 size-4" />
+                {surveyLoading ? "Aktywuję ankietę..." : "Udostępnij link pozostałym"}
+              </Button>
+            )}
+          </div>
+        )}
+
       <ul className="mt-4 divide-y divide-border rounded-lg border-2 border-foreground/20 bg-card">
         {players.map((p, playerIndex) => {
           const mark = marks[p.id];
@@ -1403,5 +1837,6 @@ function Summary({
         </Link>
       </div>
     </div>
+    </>
   );
 }

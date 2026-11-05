@@ -68,11 +68,6 @@ const TRAINING_TYPES = [
 
 const QUICK_DURATIONS = [45, 60, 75, 90, 105, 120];
 
-const MONTH_NAMES = [
-  "Styczeń", "Luty", "Marzec", "Kwiecień", "Maj", "Czerwiec",
-  "Lipiec", "Sierpień", "Wrzesień", "Październik", "Listopad", "Grudzień"
-];
-
 const QUICK_CANCEL_REASONS = [
   "Niekorzystne warunki atmosferyczne",
   "Niedostępność boiska / hali",
@@ -90,26 +85,98 @@ function formatGuestBadge(count: number): string {
   return `+${count} gości`;
 }
 
+function getTodayLocalDate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getDaysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28;
+  }
+
+  return [31, 30, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 31;
+}
+
+function parseISODate(dateStr: string): { year: number; month: number; day: number } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+
+  const [year, month, day] = dateStr.split("-").map(Number);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > getDaysInMonth(year, month)) return null;
+
+  return { year, month, day };
+}
+
+function isValidDateString(dateStr: string): boolean {
+  return !!dateStr && parseISODate(dateStr) !== null;
+}
+
+function normalizeCustomDate(dateStr: string, fallback: string): string {
+  if (!dateStr) return fallback;
+
+  const parsed = parseISODate(dateStr);
+  if (!parsed) return fallback;
+
+  const { year, month, day } = parsed;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function shiftDateByDays(dateStr: string, days: number): string {
-  const base = dateStr || new Date().toISOString().split("T")[0];
-  const [y, m, d] = base.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d + days));
-  const year = dt.getUTCFullYear();
-  const month = String(dt.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(dt.getUTCDate()).padStart(2, "0");
+  const base = parseISODate(dateStr || getTodayLocalDate());
+  if (!base) return getTodayLocalDate();
+
+  const baseDate = new Date(Date.UTC(base.year, base.month - 1, base.day));
+  baseDate.setUTCDate(baseDate.getUTCDate() + days);
+
+  const year = baseDate.getUTCFullYear();
+  const month = String(baseDate.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(baseDate.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function formatDayLabel(dateStr: string): string {
-  if (!dateStr) return "";
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  return dt.toLocaleDateString("pl-PL", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "UTC",
-  });
+  const parsed = parseISODate(dateStr);
+  if (!parsed) return "";
+
+  const labels = [
+    "niedziela",
+    "poniedziałek",
+    "wtorek",
+    "środa",
+    "czwartek",
+    "piątek",
+    "sobota",
+  ];
+  const monthNames = [
+    "stycznia",
+    "lutego",
+    "marca",
+    "kwietnia",
+    "maja",
+    "czerwca",
+    "lipca",
+    "sierpnia",
+    "września",
+    "października",
+    "listopada",
+    "grudnia",
+  ];
+
+  const y = parsed.year;
+  const m = parsed.month;
+  const d = parsed.day;
+  const adjustedYear = y - Math.floor((14 - m) / 12);
+  const adjustedMonth = m + 12 * Math.floor((14 - m) / 12) - 2;
+  const weekdayIndex =
+    (d + Math.floor((31 * adjustedMonth) / 12) + adjustedYear + Math.floor(adjustedYear / 4) - Math.floor(adjustedYear / 100) + Math.floor(adjustedYear / 400)) % 7;
+
+  return `${labels[(weekdayIndex + 6) % 7]}, ${d} ${monthNames[m - 1]}`;
 }
 
 function calculateEndTime(startH: number, startM: number, durationMinutes: number): string {
@@ -119,14 +186,11 @@ function calculateEndTime(startH: number, startM: number, durationMinutes: numbe
   return `${endH}:${endM}`;
 }
 
-function canEvaluateTraining(t: DbTrainingCard): boolean {
+function canEvaluateTraining(t: DbTrainingCard, todayStr: string, now: Date): boolean {
   if (t.status === "completed") return true;
   if (t.status === "cancelled") return false;
 
   if (t.status === "scheduled" || t.status === "planned") {
-    const now = new Date();
-    const todayStr = now.toISOString().split("T")[0];
-
     if (t.date < todayStr) return true;
 
     if (t.date === todayStr) {
@@ -158,6 +222,7 @@ export function TrainingBoard() {
 
   const [loading, setLoading] = useState(!cachedTrainings);
   const [error, setError] = useState<string | null>(null);
+  const [pendingEvaluationIds, setPendingEvaluationIds] = useState<Record<string, string[]>>({});
 
   const [activeTab, setActiveTab] = useState<"all" | "pending" | "history">("all");
   const [selectedTeamId, setSelectedTeamId] = useState<string>("all");
@@ -167,6 +232,8 @@ export function TrainingBoard() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   const [teamId, setTeamId] = useState("");
+  const [todayDate, setTodayDate] = useState("");
+  const [nowValue, setNowValue] = useState<Date | null>(null);
   const [dateType, setDateType] = useState<"today" | "tomorrow" | "custom">("today");
   const [customDate, setCustomDate] = useState("");
 
@@ -225,9 +292,47 @@ export function TrainingBoard() {
   }
 
   useEffect(() => {
+    const initialToday = getTodayLocalDate();
+    setTodayDate(initialToday);
+    setNowValue(new Date());
+    setCustomDate(initialToday);
     loadData();
-    const todayStr = new Date().toISOString().split("T")[0];
-    setCustomDate(todayStr);
+  }, []);
+
+  useEffect(() => {
+    function loadPendingEvaluationIds() {
+      const pendingIds: Record<string, Set<string>> = {};
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (!key?.startsWith("forma_eval_queue_")) continue;
+
+        try {
+          const queue = JSON.parse(localStorage.getItem(key) || "[]");
+          if (!Array.isArray(queue)) continue;
+          for (const item of queue) {
+            if (typeof item?.trainingId !== "string" || typeof item?.playerId !== "string") continue;
+            if (!pendingIds[item.trainingId]) pendingIds[item.trainingId] = new Set();
+            pendingIds[item.trainingId].add(item.playerId);
+          }
+        } catch (queueError) {
+          console.error("Nie udało się odczytać lokalnej kolejki ocen:", queueError);
+        }
+      }
+
+      setPendingEvaluationIds(
+        Object.fromEntries(
+          Object.entries(pendingIds).map(([id, playerIds]) => [id, Array.from(playerIds)])
+        )
+      );
+    }
+
+    loadPendingEvaluationIds();
+    window.addEventListener("forma-evaluation-queue-updated", loadPendingEvaluationIds);
+    window.addEventListener("focus", loadPendingEvaluationIds);
+    return () => {
+      window.removeEventListener("forma-evaluation-queue-updated", loadPendingEvaluationIds);
+      window.removeEventListener("focus", loadPendingEvaluationIds);
+    };
   }, []);
 
   useEffect(() => {
@@ -235,6 +340,24 @@ export function TrainingBoard() {
       setTeamId(teams[0].id);
     }
   }, [teams, teamId]);
+
+  useEffect(() => {
+    const originalBodyOverflow = document.body.style.overflow;
+    const originalHtmlOverflow = document.documentElement.style.overflow;
+
+    if (isWizardOpen) {
+      document.body.style.overflow = "hidden";
+      document.documentElement.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = originalBodyOverflow;
+      document.documentElement.style.overflow = originalHtmlOverflow;
+    }
+
+    return () => {
+      document.body.style.overflow = originalBodyOverflow;
+      document.documentElement.style.overflow = originalHtmlOverflow;
+    };
+  }, [isWizardOpen]);
 
   function handleOpenWizard() {
     setStep(1);
@@ -245,18 +368,27 @@ export function TrainingBoard() {
 
   function resolveDate(): string {
     const d = new Date();
-    if (dateType === "today") return d.toISOString().split("T")[0];
+    if (dateType === "today") return getTodayLocalDate();
     if (dateType === "tomorrow") {
       d.setDate(d.getDate() + 1);
-      return d.toISOString().split("T")[0];
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     }
-    return customDate || d.toISOString().split("T")[0];
+
+    const fallbackDate = todayDate || getTodayLocalDate();
+    const nextCustomDate = normalizeCustomDate(customDate || fallbackDate, fallbackDate);
+    return isValidDateString(nextCustomDate) ? nextCustomDate : fallbackDate;
   }
 
   async function handleFinishCreate() {
     if (!teamId) {
       alert("Wybierz drużynę.");
       setStep(1);
+      return;
+    }
+
+    const finalDate = resolveDate();
+    if (!isValidDateString(finalDate)) {
+      alert("Wybrana data treningu jest nieprawidłowa.");
       return;
     }
 
@@ -333,16 +465,28 @@ export function TrainingBoard() {
     }
   }
 
-  const customDateParts = (customDate || "2026-10-29").split("-");
-  const currentYear = customDateParts[0] || "2026";
-  const currentMonthNum = Number(customDateParts[1] || "10");
-  const currentDayNum = Number(customDateParts[2] || "29");
+  const initialFallbackDate = todayDate || "2025-01-01";
+  const safeCustomDate = normalizeCustomDate(customDate || initialFallbackDate, initialFallbackDate);
+  const customDateParts = safeCustomDate.split("-");
+  const currentYear = customDateParts[0] || initialFallbackDate.split("-")[0];
+  const currentMonthNum = Number(customDateParts[1] || "1");
+  const currentDayNum = Number(customDateParts[2] || "1");
+  const daysInCurrentMonth = getDaysInMonth(Number(currentYear), currentMonthNum);
 
   const formattedStart = `${String(customHour).padStart(2, "0")}:${String(customMinute).padStart(2, "0")}`;
   const formattedEnd = calculateEndTime(customHour, customMinute, durationMinutes);
 
+  const getEvaluatedCount = (t: DbTrainingCard) =>
+    Math.min(
+      new Set([
+        ...(t.evaluatedPlayerIds || []),
+        ...(pendingEvaluationIds[t.id] || []),
+      ]).size,
+      t.totalPlayers
+    );
+
   const isFullyEvaluated = (t: DbTrainingCard) =>
-    t.status === "completed" && t.evaluatedCount >= t.totalPlayers && t.totalPlayers > 0;
+    getEvaluatedCount(t) >= t.totalPlayers && t.totalPlayers > 0;
 
   const isCancelled = (t: DbTrainingCard) => t.status === "cancelled";
 
@@ -364,30 +508,32 @@ export function TrainingBoard() {
 
   return (
     <div className="mx-auto max-w-2xl pb-16">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs font-bold tracking-[0.16em] text-primary uppercase">
-            Panel szkoleniowy
-          </p>
-          <h1 className="mt-1 font-heading text-4xl uppercase tracking-tight">
-            Jednostki Treningowe
-          </h1>
+      <header className="sticky top-16 z-30 -mx-2 mb-4 border-b-2 border-foreground/10 bg-background/90 px-2 pb-3 pt-2 backdrop-blur-sm sm:-mx-0 sm:px-0">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-bold tracking-[0.16em] text-primary uppercase">
+              Panel szkoleniowy
+            </p>
+            <h1 className="mt-1 font-heading text-4xl uppercase tracking-tight">
+              Jednostki Treningowe
+            </h1>
+          </div>
+
+          <Button
+            type="button"
+            size="lg"
+            onClick={handleOpenWizard}
+            className="h-12 gap-2 text-xs font-bold uppercase tracking-wider shadow-[3px_3px_0_0_var(--foreground)] active:scale-95 transition-transform shrink-0"
+          >
+            <Plus className="size-4" />
+            Zaplanuj trening
+          </Button>
         </div>
 
-        <Button
-          type="button"
-          size="lg"
-          onClick={handleOpenWizard}
-          className="h-12 gap-2 text-xs font-bold uppercase tracking-wider shadow-[3px_3px_0_0_var(--foreground)] active:scale-95 transition-transform shrink-0"
-        >
-          <Plus className="size-4" />
-          Zaplanuj trening
-        </Button>
-      </div>
-
-      <p className="mt-3 text-xs leading-5 text-muted-foreground sm:text-sm">
-        Po treningu przechodzisz skład nazwisko po nazwisku. Wystawione oceny tworzą historię rozwoju zawodnika.
-      </p>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground sm:text-sm">
+          Po treningu przechodzisz skład nazwisko po nazwisku. Wystawione oceny tworzą historię rozwoju zawodnika.
+        </p>
+      </header>
 
       {/* SEKCJA: WYMAGAJĄ UWAGI */}
       <div className="mt-6 rounded-2xl border-2 border-foreground/20 bg-card p-4 shadow-sm">
@@ -589,9 +735,10 @@ export function TrainingBoard() {
         <ul className="mt-6 space-y-4">
           {filteredTrainings.map((t) => {
             const cancelled = isCancelled(t);
-            const canOpen = canEvaluateTraining(t);
+            const canOpen = todayDate && nowValue ? canEvaluateTraining(t, todayDate, nowValue) : false;
+            const evaluatedCount = getEvaluatedCount(t);
             const completed = isFullyEvaluated(t);
-            const inProgress = canOpen && t.evaluatedCount > 0 && !completed;
+            const inProgress = canOpen && evaluatedCount > 0 && !completed;
 
             return (
               <li
@@ -710,7 +857,7 @@ export function TrainingBoard() {
                       ) : completed ? (
                         <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                           <CheckCircle2 className="size-4 shrink-0" />
-                          <span>Komplet ocen ({t.evaluatedCount} / {t.totalPlayers})</span>
+                          <span>Komplet ocen ({evaluatedCount} / {t.totalPlayers})</span>
                           {t.guestCount > 0 && (
                             <span className="rounded-md border border-amber-600/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300">
                               {formatGuestBadge(t.guestCount)}
@@ -720,7 +867,7 @@ export function TrainingBoard() {
                       ) : inProgress ? (
                         <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
                           <AlertCircle className="size-4 shrink-0" />
-                          <span>W trakcie oceny ({t.evaluatedCount} / {t.totalPlayers})</span>
+                          <span>W trakcie oceny ({evaluatedCount} / {t.totalPlayers})</span>
                           {t.guestCount > 0 && (
                             <span className="rounded-md border border-amber-600/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-800 dark:text-amber-300">
                               {formatGuestBadge(t.guestCount)}
@@ -867,11 +1014,11 @@ export function TrainingBoard() {
         <div
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
-          className="fixed inset-0 z-50 flex flex-col justify-between bg-background/98 p-4 backdrop-blur-md sm:p-8 animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 overflow-hidden bg-background/98 p-4 backdrop-blur-md sm:p-8 animate-in fade-in duration-200 overscroll-contain"
         >
-          <div className="mx-auto flex h-full w-full max-w-lg flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between border-b pb-3">
+          <div className="mx-auto flex h-full max-h-screen w-full max-w-lg flex-col justify-between overflow-hidden rounded-2xl border border-foreground/10 bg-background shadow-[0_20px_60px_rgba(0,0,0,0.2)]">
+            <div className="sticky top-0 z-20 border-b bg-background/95 px-4 pb-3 pt-4 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-xs font-bold text-primary">KROK {step} Z 3</span>
                   <span className="text-xs text-muted-foreground">·</span>
@@ -895,6 +1042,7 @@ export function TrainingBoard() {
               </div>
             </div>
 
+            <div className="flex-1 overflow-y-auto px-4 py-4">
             {step === 1 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
                 <div>
@@ -952,7 +1100,7 @@ export function TrainingBoard() {
                       onClick={() => {
                         setDateType("custom");
                         if (!customDate) {
-                          setCustomDate(shiftDateByDays(new Date().toISOString().split("T")[0], 2));
+                          setCustomDate(shiftDateByDays(getTodayLocalDate(), 2));
                         }
                       }}
                       className={cn(
@@ -968,67 +1116,40 @@ export function TrainingBoard() {
 
                   {dateType === "custom" && (
                     <div className="mt-2.5 rounded-xl border-2 border-foreground/20 bg-card p-3 shadow-[2px_2px_0_0_var(--foreground)] space-y-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <button
                           type="button"
                           onClick={() => setCustomDate((curr) => shiftDateByDays(curr, -1))}
-                          className="flex h-11 w-11 items-center justify-center rounded-lg border border-foreground/20 bg-background text-foreground hover:bg-muted active:scale-95"
+                          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-foreground/20 bg-background text-foreground hover:bg-muted active:scale-95"
                         >
                           <ChevronLeft className="size-5" />
                         </button>
 
-                        <div className="text-center px-2">
-                          <span className="font-heading text-lg font-bold uppercase block">
-                            {formatDayLabel(customDate)}
+                        <div className="min-w-0 flex-1 text-center px-2">
+                          <span className="block font-heading text-base font-bold uppercase leading-tight">
+                            {formatDayLabel(safeCustomDate)}
                           </span>
-                          <span className="font-mono text-xs text-primary font-semibold">
-                            {customDate}
+                          <span className="mt-1 block font-mono text-[11px] text-primary font-semibold">
+                            {safeCustomDate}
                           </span>
                         </div>
 
                         <button
                           type="button"
                           onClick={() => setCustomDate((curr) => shiftDateByDays(curr, 1))}
-                          className="flex h-11 w-11 items-center justify-center rounded-lg border border-foreground/20 bg-background text-foreground hover:bg-muted active:scale-95"
+                          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-foreground/20 bg-background text-foreground hover:bg-muted active:scale-95"
                         >
                           <ChevronRight className="size-5" />
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border">
-                        <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase">Dzień</span>
-                          <select
-                            value={currentDayNum}
-                            onChange={(e) => {
-                              const newD = String(e.target.value).padStart(2, "0");
-                              const newM = String(currentMonthNum).padStart(2, "0");
-                              setCustomDate(`${currentYear}-${newM}-${newD}`);
-                            }}
-                            className="mt-1 h-10 w-full rounded-lg border-2 border-foreground/20 bg-background px-3 font-mono font-bold text-sm outline-none focus:border-foreground"
-                          >
-                            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                              <option key={d} value={d}>{d}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase">Miesiąc</span>
-                          <select
-                            value={currentMonthNum}
-                            onChange={(e) => {
-                              const newM = String(currentMonthNum).padStart(2, "0");
-                              const newD = String(currentDayNum).padStart(2, "0");
-                              setCustomDate(`${currentYear}-${newM}-${newD}`);
-                            }}
-                            className="mt-1 h-10 w-full rounded-lg border-2 border-foreground/20 bg-background px-3 font-semibold text-sm outline-none focus:border-foreground"
-                          >
-                            {MONTH_NAMES.map((name, idx) => (
-                              <option key={idx + 1} value={idx + 1}>{name}</option>
-                            ))}
-                          </select>
-                        </div>
+                      <div className="border-t border-border pt-2">
+                        <input
+                          type="date"
+                          value={safeCustomDate}
+                          onChange={(e) => setCustomDate(e.target.value || getTodayLocalDate())}
+                          className="h-11 w-full rounded-lg border-2 border-foreground/20 bg-background px-3 font-mono text-sm outline-none focus:border-foreground"
+                        />
                       </div>
                     </div>
                   )}
@@ -1331,8 +1452,9 @@ export function TrainingBoard() {
                 </div>
               </div>
             )}
+            </div>
 
-            <div className="border-t pt-3">
+            <div className="border-t bg-background px-4 pb-4 pt-3">
               <div className="flex items-center gap-2">
                 {step > 1 ? (
                   <Button

@@ -20,6 +20,7 @@ export interface DbTrainingCard {
   trainingType?: string;
   organizationalNote?: string;
   evaluatedCount: number;
+  evaluatedPlayerIds: string[];
   totalPlayers: number;
   guestCount: number;
   leadCoachId: string | null;
@@ -164,7 +165,7 @@ export async function getCoachTrainingsAction() {
     const evalsRes = trainingIds.length > 0
       ? await supabase
           .from("evaluations")
-          .select("training_id, is_present, score, absence_reason, is_guest")
+        .select("training_id, player_id, is_present, score, absence_reason, is_guest")
           .in("training_id", trainingIds)
       : { data: [], error: null };
 
@@ -195,6 +196,9 @@ export async function getCoachTrainingsAction() {
       const evaluatedCount = trainingEvals.filter(
         (e: any) => e.score !== null || (!e.is_present && e.absence_reason !== null)
       ).length;
+      const evaluatedPlayerIds = trainingEvals
+        .filter((e: any) => e.score !== null || (!e.is_present && e.absence_reason !== null))
+        .map((e: any) => e.player_id);
 
       return {
         id: t.id,
@@ -210,6 +214,7 @@ export async function getCoachTrainingsAction() {
         organizationalNote: t.organizational_note || undefined,
         status: t.status || "scheduled",
         evaluatedCount,
+        evaluatedPlayerIds,
         totalPlayers,
         guestCount,
         leadCoachId: t.lead_coach_id,
@@ -246,6 +251,20 @@ export async function createTrainingAction(payload: {
   status: "completed" | "scheduled";
 }) {
   try {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.date)) {
+      return { success: false, error: "Data treningu jest nieprawidłowa." };
+    }
+
+    const [year, month, day] = payload.date.split("-").map(Number);
+    const parsedDate = new Date(Date.UTC(year, month - 1, day));
+    if (
+      parsedDate.getUTCFullYear() !== year ||
+      parsedDate.getUTCMonth() !== month - 1 ||
+      parsedDate.getUTCDate() !== day
+    ) {
+      return { success: false, error: "Data treningu jest nieprawidłowa." };
+    }
+
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 

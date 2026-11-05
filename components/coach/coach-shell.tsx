@@ -78,7 +78,7 @@ export function CoachShell({ children }: { children: React.ReactNode }) {
       <PitchArt className="pointer-events-none fixed bottom-0 -left-[20%] w-[600px] text-foreground/10 select-none opacity-40 hidden md:block rotate-180" />
 
       {/* GÓRNY PASEK NAWIGACYJNY */}
-      <header className="sticky top-0 z-40 border-b-2 border-foreground/15 bg-background/95 backdrop-blur-md">
+      <header className="fixed inset-x-0 top-0 z-50 border-b-2 border-foreground/15 bg-background/95 backdrop-blur-md shadow-[0_2px_0_0_rgba(0,0,0,0.02)]">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
           <Link href="/trener" className="group flex items-center gap-2.5 text-foreground">
             <PitchMark className="size-7 text-primary transition-transform duration-200 group-hover:rotate-12" />
@@ -109,7 +109,7 @@ export function CoachShell({ children }: { children: React.ReactNode }) {
       </header>
 
       {/* GŁÓWNA TREŚĆ */}
-      <main className="relative mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
+      <main className="relative mx-auto w-full max-w-6xl flex-1 px-4 pb-6 pt-20 sm:px-6 sm:pb-8 sm:pt-24">
         {children}
       </main>
     </div>

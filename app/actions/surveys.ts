@@ -1,6 +1,7 @@
 'use server';
 
 import { randomUUID } from 'crypto';
+import { createClient } from '@/lib/supabase-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
 export interface SurveyPublicData {
@@ -306,5 +307,105 @@ export async function submitGroupSurveyResponse(payload: {
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err.message };
+  }
+}
+
+export async function submitInPersonSurveyResponse(payload: {
+  trainingId: string;
+  playerId: string;
+  fatigue: number;
+  satisfaction: number;
+  feedbackNote?: string;
+}) {
+  try {
+    const { trainingId, playerId, fatigue, satisfaction, feedbackNote } = payload;
+
+    if (!trainingId || !playerId) {
+      return { success: false, error: 'Nieprawidłowa jednostka lub zawodnik.' };
+    }
+    if (
+      !Number.isInteger(fatigue) || fatigue < 1 || fatigue > 5 ||
+      !Number.isInteger(satisfaction) || satisfaction < 1 || satisfaction > 5
+    ) {
+      return { success: false, error: 'Oceny muszą mieścić się w przedziale 1–5.' };
+    }
+
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: 'Brak autoryzacji.' };
+
+    const { data: training, error: trainingError } = await supabase
+      .from('trainings')
+      .select('id, team_id, lead_coach_id')
+      .eq('id', trainingId)
+      .single();
+
+    if (trainingError || !training) {
+      return { success: false, error: 'Nie znaleziono jednostki treningowej.' };
+    }
+
+    const isOwner = !training.lead_coach_id || training.lead_coach_id === user.id;
+    if (!isOwner) {
+      const { data: assignment, error: assignmentError } = await supabase
+        .from('team_coaches')
+        .select('id')
+        .eq('team_id', training.team_id)
+        .eq('coach_id', user.id)
+        .maybeSingle();
+
+      if (assignmentError) throw assignmentError;
+      if (!assignment) return { success: false, error: 'Brak uprawnień do tej jednostki.' };
+    }
+
+    const { data: attendance, error: attendanceError } = await supabase
+      .from('evaluations')
+      .select('is_present')
+      .eq('training_id', trainingId)
+      .eq('player_id', playerId)
+      .maybeSingle();
+
+    if (attendanceError) throw attendanceError;
+    if (!attendance?.is_present) {
+      return { success: false, error: 'Ankietę może wypełnić tylko obecny zawodnik.' };
+    }
+
+    const { data: survey, error: surveyError } = await supabaseAdmin
+      .from('post_training_surveys')
+      .select('id, expires_at, is_completed')
+      .eq('training_id', trainingId)
+      .eq('player_id', playerId)
+      .maybeSingle();
+
+    if (surveyError) throw surveyError;
+    if (!survey) return { success: false, error: 'Nie znaleziono ankiety dla tego zawodnika.' };
+    if (survey.is_completed) {
+      return { success: false, error: 'Ta ankieta została już wypełniona.' };
+    }
+    if (survey.expires_at && new Date(survey.expires_at) < new Date()) {
+      return { success: false, error: 'Czas na wypełnienie ankiety upłynął.' };
+    }
+
+    const now = new Date().toISOString();
+    const { error: updateError } = await supabaseAdmin
+      .from('post_training_surveys')
+      .update({
+        fatigue,
+        satisfaction,
+        feedback_note: feedbackNote?.trim() || null,
+        is_completed: true,
+        completed_at: now,
+        updated_at: now,
+      })
+      .eq('id', survey.id)
+      .eq('is_completed', false);
+
+    if (updateError) throw updateError;
+
+    return { success: true };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Nie udało się zapisać ankiety na miejscu.',
+    };
   }
 }
