@@ -12,6 +12,16 @@
 | `created_at` | `timestamptz` |  |
 | `updated_at` | `timestamptz` |  |
 
+## Table `club_fields`
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `club_id` | `uuid` | References `clubs.id` |
+| `name` | `text` | Unique per club, trimmed and non-empty |
+| `is_active` | `bool` | Defaults to true |
+| `created_at` | `timestamptz` | Defaults to now |
+
 ## Table `profiles`
 
 ### Columns
@@ -258,6 +268,12 @@ Apply that migration to the Supabase project; this documentation alone does not 
 |--------|---------|-------|--------|-------|------------|
 | `Staff read club player history` | SELECT | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR same-club assigned team coach` | — |
 | `Club admins manage player history` | ALL | authenticated | PERMISSIVE | `master_admin OR (same club AND role in club_admin/coordinator)` | Same as USING |
+
+Transfers performed from the admin player registry use the
+`transfer_player_to_team` database function. It updates `players.current_team_id`,
+closes the previous `player_team_history` record, and creates the new one in a
+single transaction. Execution is restricted to `service_role`; the server action
+authorizes the administrator and supplies the club ID.
 
 ### `trainings`
 

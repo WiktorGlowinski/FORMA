@@ -11,22 +11,18 @@ import {
   Users, 
   Share2, 
   ChevronDown, 
-  ChevronUp, 
-  AlertCircle 
+  ChevronUp
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SurveyStatusItem, SurveySummary } from "@/app/actions/coach";
-import { cn } from "@/lib/utils";
 
 interface TrainingSurveyPanelProps {
-  trainingId: string;
   surveys: SurveyStatusItem[];
   summary?: SurveySummary;
   shareText?: string;
 }
 
 export function TrainingSurveyPanel({
-  trainingId,
   surveys,
   summary,
   shareText,

@@ -30,12 +30,7 @@ export function AddGuestPlayerModal({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isOpen) {
-      setQuery("");
-      setCandidates([]);
-      setError(null);
-      return;
-    }
+    if (!isOpen) return;
 
     const timer = setTimeout(async () => {
       setSearching(true);
@@ -52,6 +47,13 @@ export function AddGuestPlayerModal({
     return () => clearTimeout(timer);
   }, [query, isOpen, trainingId]);
 
+  function handleClose() {
+    setQuery("");
+    setCandidates([]);
+    setError(null);
+    onClose();
+  }
+
   async function handleAddGuest(player: GuestCandidatePlayer) {
     setAddingId(player.id);
     setError(null);
@@ -60,7 +62,7 @@ export function AddGuestPlayerModal({
 
     if (res.success) {
       onPlayerAdded();
-      onClose();
+      handleClose();
     } else {
       setError(res.error || "Wystąpił problem z dodaniem zawodnika.");
     }
@@ -82,7 +84,7 @@ export function AddGuestPlayerModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="rounded-lg border border-border p-1 hover:bg-muted"
           >
             <X className="size-4" />
@@ -182,7 +184,7 @@ export function AddGuestPlayerModal({
           <Button
             type="button"
             variant="ghost"
-            onClick={onClose}
+            onClick={handleClose}
             className="h-10 text-xs text-muted-foreground"
           >
             Zamknij

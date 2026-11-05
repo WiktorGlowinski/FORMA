@@ -25,7 +25,7 @@ export function SurveyShareModal({ isOpen, onClose, surveys, shareText }: Survey
           text: shareText,
         });
         return;
-      } catch (err) {
+      } catch {
         // Użytkownik zamknął arkusz udostępniania bez wyboru – brak akcji
       }
     }

@@ -4,7 +4,67 @@ import { revalidatePath } from "next/cache";
 import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase-server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import type { Mark } from "@/components/coach/data";
+import {
+  INJURY_KINDS,
+  type AbsenceReason,
+  type EvaluationScore,
+  type InjuryKind,
+  type Mark,
+} from "@/components/coach/data";
+
+type Relation<T> = T | T[] | null;
+
+type TrainingListRow = {
+  id: string;
+  team_id: string;
+  lead_coach_id: string | null;
+  date: string;
+  start_time: string | null;
+  end_time: string | null;
+  location: string | null;
+  topic: string | null;
+  main_goal: string | null;
+  training_type: string | null;
+  organizational_note: string | null;
+  status: string | null;
+  teams: Relation<{ id: string; name: string }>;
+  lead_coach: Relation<{ full_name: string | null }>;
+};
+
+type TrainingEvaluationRow = {
+  player_id: string;
+  is_present: boolean;
+  score: EvaluationScore | null;
+  absence_reason: AbsenceReason | null;
+  is_guest: boolean;
+  comment?: string | null;
+};
+
+type SurveyRow = {
+  is_completed: boolean;
+  fatigue: number | null;
+  satisfaction: number | null;
+  feedback_note: string | null;
+  expires_at: string | null;
+  players: Relation<{
+    first_name: string;
+    last_name: string;
+    jersey_number: number | null;
+  }>;
+};
+
+type EvaluationPlayer = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  jerseyNumber: number;
+  role: "Zawodnik";
+  avatarUrl: string | null;
+  parentName: string | null;
+  parentPhone: string | null;
+  phone: string | null;
+  isGuest: boolean;
+};
 
 export interface DbTrainingCard {
   id: string;
@@ -66,6 +126,67 @@ export interface CoachAlertItem {
   badgeText: string;
   description: string;
   severity: "danger" | "warning";
+}
+
+export interface CoachField {
+  id: string;
+  name: string;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+  return fallback;
+}
+
+export async function getCoachFieldsAction(): Promise<{
+  success: boolean;
+  fields: CoachField[];
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+      return { success: false, error: "Brak aktywnej sesji użytkownika.", fields: [] };
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("club_id, role, is_active")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (profileError) throw profileError;
+    if (!profile || profile.role !== "coach" || profile.is_active === false || !profile.club_id) {
+      return { success: false, error: "Brak uprawnień trenera.", fields: [] };
+    }
+
+    const { data: fields, error } = await supabase
+      .from("club_fields")
+      .select("id, name")
+      .eq("club_id", profile.club_id)
+      .eq("is_active", true)
+      .order("name");
+
+    if (error) throw error;
+    return { success: true, fields: fields || [] };
+  } catch (err: unknown) {
+    console.error("Błąd getCoachFieldsAction:", err);
+    return {
+      success: false,
+      error: getErrorMessage(err, "Nie udało się pobrać listy boisk."),
+      fields: [],
+    };
+  }
 }
 
 async function canManageTrainingEvaluations(
@@ -144,10 +265,13 @@ async function getPendingSurveyLinks(trainingId: string) {
     .gt("expires_at", new Date().toISOString());
 
   if (error) throw error;
-  return (surveys || []).map((survey: any) => {
+  return (surveys || []).map((survey: {
+    token: string;
+    players: Relation<{ first_name: string; last_name: string }>;
+  }) => {
     const player = Array.isArray(survey.players) ? survey.players[0] : survey.players;
     return {
-      playerName: `${player.first_name} ${player.last_name}`,
+      playerName: player ? `${player.first_name} ${player.last_name}` : "Zawodnik",
       url: `/ankieta/${survey.token}`,
     };
   });
@@ -195,7 +319,7 @@ export async function getCoachTrainingsAction() {
     }
 
     const assignedTeams = (assignments || [])
-      .map((item: any) => {
+      .map((item: { teams: Relation<{ id: string; name: string; is_active: boolean }> }) => {
         const team = Array.isArray(item.teams) ? item.teams[0] : item.teams;
         return team && team.is_active ? { id: team.id, name: team.name } : null;
       })
@@ -244,8 +368,8 @@ export async function getCoachTrainingsAction() {
     if (trainingsRes.error) throw trainingsRes.error;
     if (squadRes.error) throw squadRes.error;
 
-    const trainings = trainingsRes.data || [];
-    const trainingIds = trainings.map((t: any) => t.id);
+    const trainings = (trainingsRes.data || []) as TrainingListRow[];
+    const trainingIds = trainings.map((t) => t.id);
 
     const evalsRes = trainingIds.length > 0
       ? await supabase
@@ -257,15 +381,21 @@ export async function getCoachTrainingsAction() {
     if (evalsRes.error) throw evalsRes.error;
 
     const allEvaluations = evalsRes.data || [];
+    const evaluationsByTraining = new Map<string, typeof allEvaluations>();
+    for (const evaluation of allEvaluations) {
+      const trainingEvaluations = evaluationsByTraining.get(evaluation.training_id) || [];
+      trainingEvaluations.push(evaluation);
+      evaluationsByTraining.set(evaluation.training_id, trainingEvaluations);
+    }
 
     const playersCountByTeam: Record<string, number> = {};
-    (squadRes.data || []).forEach((p: any) => {
+    (squadRes.data || []).forEach((p: { current_team_id: string | null }) => {
       if (p.current_team_id) {
         playersCountByTeam[p.current_team_id] = (playersCountByTeam[p.current_team_id] || 0) + 1;
       }
     });
 
-    const formattedTrainings: DbTrainingCard[] = trainings.map((t: any) => {
+    const formattedTrainings: DbTrainingCard[] = trainings.map((t) => {
       const tId = t.team_id;
       const teamObj = Array.isArray(t.teams) ? t.teams[0] : t.teams;
       const coachProfile = Array.isArray(t.lead_coach) ? t.lead_coach[0] : t.lead_coach;
@@ -273,17 +403,19 @@ export async function getCoachTrainingsAction() {
       const isOwner = !t.lead_coach_id || t.lead_coach_id === user.id;
       const leadCoachName = coachProfile?.full_name || (isOwner ? "Twój profil" : "Inny trener");
 
-      const trainingEvals = allEvaluations.filter((e: any) => e.training_id === t.id);
-      const guestCount = trainingEvals.filter((e: any) => e.is_guest).length;
+      const trainingEvals = evaluationsByTraining.get(t.id) || [];
+      let guestCount = 0;
+      let evaluatedCount = 0;
+      const evaluatedPlayerIds: string[] = [];
+      for (const evaluation of trainingEvals) {
+        if (evaluation.is_guest) guestCount += 1;
+        if (evaluation.score !== null || (!evaluation.is_present && evaluation.absence_reason !== null)) {
+          evaluatedCount += 1;
+          evaluatedPlayerIds.push(evaluation.player_id);
+        }
+      }
       const baseTeamCount = playersCountByTeam[tId] || 0;
       const totalPlayers = baseTeamCount + guestCount;
-
-      const evaluatedCount = trainingEvals.filter(
-        (e: any) => e.score !== null || (!e.is_present && e.absence_reason !== null)
-      ).length;
-      const evaluatedPlayerIds = trainingEvals
-        .filter((e: any) => e.score !== null || (!e.is_present && e.absence_reason !== null))
-        .map((e: any) => e.player_id);
 
       return {
         id: t.id,
@@ -314,9 +446,9 @@ export async function getCoachTrainingsAction() {
       trainings: formattedTrainings,
       teams: assignedTeams,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("Błąd getCoachTrainingsAction:", err);
-    return { success: false, error: err.message, trainings: [], teams: [] };
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), trainings: [], teams: [] };
   }
 }
 
@@ -328,7 +460,7 @@ export async function createTrainingAction(payload: {
   date: string;
   startTime: string;
   endTime: string;
-  location: string;
+  fieldId: string;
   topic?: string;
   mainGoal?: string;
   trainingType?: string;
@@ -378,6 +510,19 @@ export async function createTrainingAction(payload: {
       return { success: false, error: "Nie znaleziono drużyny." };
     }
 
+    const { data: field, error: fieldErr } = await supabase
+      .from("club_fields")
+      .select("name")
+      .eq("id", payload.fieldId)
+      .eq("club_id", team.club_id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (fieldErr) throw fieldErr;
+    if (!field) {
+      return { success: false, error: "Wybrane boisko jest niedostępne. Wybierz boisko z listy." };
+    }
+
     const { data, error } = await supabase
       .from("trainings")
       .insert({
@@ -387,7 +532,7 @@ export async function createTrainingAction(payload: {
         date: payload.date,
         start_time: payload.startTime,
         end_time: payload.endTime,
-        location: payload.location,
+        location: field.name,
         topic: payload.topic || null,
         main_goal: payload.mainGoal || null,
         training_type: payload.trainingType || null,
@@ -402,8 +547,8 @@ export async function createTrainingAction(payload: {
 
     revalidatePath("/trener");
     return { success: true, trainingId: data.id };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -493,11 +638,58 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       return { success: false, error: "Brak uprawnień do jednostki treningowej." };
     }
     const teamObj = Array.isArray(training.teams) ? training.teams[0] : training.teams;
+    const currentPlayerIds = (playersRes.data || []).map((player) => player.id);
+    let previousInjuries: Record<string, InjuryKind> = {};
 
-    const guestEvaluations = (evalsRes.data || []).filter((e: any) => e.is_guest);
-    const guestPlayerIds = Array.from(new Set(guestEvaluations.map((e: any) => e.player_id)));
+    if (currentPlayerIds.length > 0) {
+      const { data: previousTraining, error: previousTrainingError } = await supabaseAdmin
+        .from("trainings")
+        .select("id")
+        .eq("club_id", training.club_id)
+        .eq("team_id", training.team_id)
+        .eq("status", "completed")
+        .or(
+          `date.lt.${training.date},and(date.eq.${training.date},start_time.lt.${training.start_time})`
+        )
+        .order("date", { ascending: false })
+        .order("start_time", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    let guestPlayers: any[] = [];
+      if (previousTrainingError) throw previousTrainingError;
+
+      if (previousTraining) {
+        const { data: previousEvaluations, error: previousEvaluationsError } = await supabaseAdmin
+          .from("evaluations")
+          .select("player_id, comment")
+          .eq("training_id", previousTraining.id)
+          .eq("club_id", training.club_id)
+          .eq("is_present", false)
+          .eq("absence_reason", "injury")
+          .in("player_id", currentPlayerIds);
+
+        if (previousEvaluationsError) throw previousEvaluationsError;
+
+        previousInjuries = (previousEvaluations || []).reduce<Record<string, InjuryKind>>(
+          (injuries, evaluation) => {
+            const injury = evaluation.comment?.startsWith("Uraz: ")
+              ? evaluation.comment.slice("Uraz: ".length)
+              : null;
+            const matchingKind = INJURY_KINDS.find((kind) => kind.id === injury);
+            if (matchingKind) {
+              injuries[evaluation.player_id] = matchingKind.id;
+            }
+            return injuries;
+          },
+          {}
+        );
+      }
+    }
+
+    const guestEvaluations = (evalsRes.data || []).filter((e: TrainingEvaluationRow) => e.is_guest);
+    const guestPlayerIds = Array.from(new Set(guestEvaluations.map((e: TrainingEvaluationRow) => e.player_id)));
+
+    let guestPlayers: EvaluationPlayer[] = [];
     if (guestPlayerIds.length > 0) {
       const { data: guests } = await supabase
         .from("players")
@@ -505,7 +697,16 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
         .in("id", guestPlayerIds);
 
       if (guests) {
-        guestPlayers = guests.map((g: any) => ({
+        guestPlayers = guests.map((g: {
+          id: string;
+          first_name: string;
+          last_name: string;
+          jersey_number: number | null;
+          avatar_url: string | null;
+          parent_name: string | null;
+          parent_phone: string | null;
+          phone: string | null;
+        }) => ({
           id: g.id,
           firstName: g.first_name,
           lastName: g.last_name,
@@ -520,7 +721,16 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       }
     }
 
-    const regularPlayers = (playersRes.data || []).map((p: any) => ({
+    const regularPlayers: EvaluationPlayer[] = (playersRes.data || []).map((p: {
+      id: string;
+      first_name: string;
+      last_name: string;
+      jersey_number: number | null;
+      avatar_url: string | null;
+      parent_name: string | null;
+      parent_phone: string | null;
+      phone: string | null;
+    }) => ({
       id: p.id,
       firstName: p.first_name,
       lastName: p.last_name,
@@ -540,12 +750,16 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
     ];
 
     const initialMarks: Record<string, Mark> = {};
-    (evalsRes.data || []).forEach((row: any) => {
+    (evalsRes.data || []).forEach((row: TrainingEvaluationRow) => {
       if (!row.is_present && row.absence_reason) {
+        const injuryValue = row.comment?.startsWith("Uraz: ")
+          ? row.comment.slice("Uraz: ".length)
+          : null;
+        const injury = INJURY_KINDS.find((kind) => kind.id === injuryValue)?.id;
         initialMarks[row.player_id] = {
           type: "absence",
           reason: row.absence_reason,
-          injury: row.comment?.startsWith("Uraz: ") ? row.comment.replace("Uraz: ", "") : undefined,
+          injury,
         };
       } else if (row.score) {
         initialMarks[row.player_id] = {
@@ -562,28 +776,28 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
     if (surveyRows.length > 0) {
       const firstExpiresAt = surveyRows[0]?.expires_at || null;
       const isExpired = firstExpiresAt ? new Date(firstExpiresAt).getTime() <= Date.now() : false;
-      const completedList = surveyRows.filter((s: any) => s.is_completed);
+      const completedList = surveyRows.filter((s: SurveyRow) => s.is_completed);
       const totalCount = surveyRows.length;
       const completedCount = completedList.length;
 
       const avgFatigue = completedCount > 0
-        ? Number((completedList.reduce((acc: number, cur: any) => acc + (cur.fatigue || 0), 0) / completedCount).toFixed(1))
+        ? Number((completedList.reduce((acc: number, cur: SurveyRow) => acc + (cur.fatigue || 0), 0) / completedCount).toFixed(1))
         : null;
 
       const avgSatisfaction = completedCount > 0
-        ? Number((completedList.reduce((acc: number, cur: any) => acc + (cur.satisfaction || 0), 0) / completedCount).toFixed(1))
+        ? Number((completedList.reduce((acc: number, cur: SurveyRow) => acc + (cur.satisfaction || 0), 0) / completedCount).toFixed(1))
         : null;
 
       const notes = completedList
-        .filter((s: any) => Boolean(s.feedback_note))
-        .map((s: any) => {
+        .filter((s: SurveyRow) => Boolean(s.feedback_note))
+        .map((s: SurveyRow) => {
           const p = Array.isArray(s.players) ? s.players[0] : s.players;
           return {
             playerName: p ? `${p.first_name} ${p.last_name}` : "Zawodnik",
             jerseyNumber: p?.jersey_number ?? null,
             fatigue: s.fatigue || 0,
             satisfaction: s.satisfaction || 0,
-            feedbackNote: s.feedback_note,
+            feedbackNote: s.feedback_note ?? "",
           };
         });
 
@@ -616,10 +830,11 @@ export async function getTrainingEvaluationDataAction(trainingId: string) {
       },
       squad,
       initialMarks,
+      previousInjuries,
       surveySummary,
     };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -708,8 +923,8 @@ export async function savePlayerMarkAction(trainingId: string, playerId: string,
     }
 
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -746,8 +961,8 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
     revalidatePath(`/trener/${trainingId}`);
     revalidatePath("/trener");
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -824,7 +1039,7 @@ export async function enableTrainingSurveyAction(trainingId: string) {
 
     const surveyRows = (presentEvals || [])
       .filter((evaluation) => !existingPlayerIds.has(evaluation.player_id))
-      .map((e: any) => ({
+      .map((e: { player_id: string }) => ({
       club_id: training.club_id,
       training_id: trainingId,
       player_id: e.player_id,
@@ -859,8 +1074,8 @@ export async function enableTrainingSurveyAction(trainingId: string) {
       success: true,
       surveyUrls: await getPendingSurveyLinks(trainingId),
     };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -1014,8 +1229,8 @@ export async function getCoachAlertsAction(): Promise<{
     }
 
     return { success: true, alerts };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Błąd pobierania alertów" };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Błąd pobierania alertów") };
   }
 }
 
@@ -1083,8 +1298,8 @@ export async function cancelTrainingAction(
 
     revalidatePath("/trener");
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Błąd podczas odwoływania treningu" };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Błąd podczas odwoływania treningu") };
   }
 }
 
@@ -1131,7 +1346,7 @@ export async function searchClubPlayersForGuestAction(
       .select("id")
       .eq("current_team_id", training.team_id);
 
-    const teamPlayerIds = (teamPlayers || []).map((p: any) => p.id);
+    const teamPlayerIds = (teamPlayers || []).map((p: { id: string }) => p.id);
 
     // 2. Wykluczamy zawodników już zapisanych w ocenach jednostki (np. dodani wcześniej goście)
     const { data: existingEvaluations } = await supabase
@@ -1139,7 +1354,7 @@ export async function searchClubPlayersForGuestAction(
       .select("player_id")
       .eq("training_id", trainingId);
 
-    const evaluatedPlayerIds = (existingEvaluations || []).map((e: any) => e.player_id);
+    const evaluatedPlayerIds = (existingEvaluations || []).map((e: { player_id: string }) => e.player_id);
 
     const excludedIds = Array.from(new Set([...teamPlayerIds, ...evaluatedPlayerIds]));
 
@@ -1179,7 +1394,14 @@ export async function searchClubPlayersForGuestAction(
     const { data: players, error: pError } = await dbQuery;
     if (pError) throw pError;
 
-    const candidates: GuestCandidatePlayer[] = (players || []).map((p: any) => {
+    const candidates: GuestCandidatePlayer[] = (players || []).map((p: {
+      id: string;
+      first_name: string;
+      last_name: string;
+      jersey_number: number | null;
+      avatar_url: string | null;
+      teams: Relation<{ name: string; age_group: string | null }>;
+    }) => {
       const team = Array.isArray(p.teams) ? p.teams[0] : p.teams;
       return {
         id: p.id,
@@ -1193,8 +1415,8 @@ export async function searchClubPlayersForGuestAction(
     });
 
     return { success: true, candidates };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Błąd wyszukiwania zawodników" };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Błąd wyszukiwania zawodników") };
   }
 }
 
@@ -1303,8 +1525,8 @@ export async function addGuestPlayerToTrainingAction(
     revalidatePath("/trener");
 
     return { success: true, evaluationId: evaluation.id };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Błąd dodawania gościa" };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Błąd dodawania gościa") };
   }
 }
 
@@ -1352,7 +1574,11 @@ export async function getTrainingSurveysStatusAction(trainingId: string): Promis
     let expiresAt: string | null = null;
     let isExpired = false;
 
-    const surveys: SurveyStatusItem[] = (data || []).map((s: any) => {
+    const surveys: SurveyStatusItem[] = (data || []).map((s: SurveyRow & {
+      id: string;
+      player_id: string;
+      token: string;
+    }) => {
       if (!expiresAt && s.expires_at) {
         expiresAt = s.expires_at;
         if (new Date(s.expires_at) < new Date()) {
@@ -1418,7 +1644,7 @@ export async function getTrainingSurveysStatusAction(trainingId: string): Promis
     const shareText = `FORMA — Ankieta potreningowa${trainingHeader}\n${pendingSurveyLinks || "Brak oczekujących ankiet."}\n\nLinki ważne 24h.`;
 
     return { success: true, surveys, summary, shareText };
-  } catch (err: any) {
-    return { success: false, error: err.message, surveys: [] };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), surveys: [] };
   }
 }

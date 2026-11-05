@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase-server';
+import { getErrorMessage } from '@/lib/error-message';
 
 export interface CsvPlayerRecord {
   firstName: string;
@@ -53,8 +54,8 @@ export async function importPlayersBatch(
       importedCount: data.length, 
       players: data 
     };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, 'Nie udało się wykonać operacji.') };
   }
 }
 export interface CoachPlayerItem {
@@ -143,7 +144,16 @@ export async function getCoachRosterAction(): Promise<{
 
     if (pError) throw pError;
 
-    const roster: CoachPlayerItem[] = (players || []).map((p: any) => {
+    const roster: CoachPlayerItem[] = (players || []).map((p: {
+      id: string;
+      first_name: string;
+      last_name: string;
+      jersey_number: number | null;
+      avatar_url: string | null;
+      parent_name: string | null;
+      parent_phone: string | null;
+      teams: { name: string; age_group: string | null } | { name: string; age_group: string | null }[] | null;
+    }) => {
       const team = Array.isArray(p.teams) ? p.teams[0] : p.teams;
       return {
         id: p.id,
@@ -159,8 +169,8 @@ export async function getCoachRosterAction(): Promise<{
     });
 
     return { success: true, roster };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Błąd pobierania kadry" };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Błąd pobierania kadry") };
   }
 }
 
@@ -251,7 +261,22 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
     });
 
     const rawList = evaluations || [];
-    const history: PlayerHistoryRecord[] = rawList.map((r: any) => {
+    const history: PlayerHistoryRecord[] = rawList.map((r: {
+      id: string;
+      training_id: string;
+      is_present: boolean;
+      score: string | null;
+      absence_reason: string | null;
+      trainings: {
+        date: string;
+        topic: string | null;
+        training_type: string | null;
+      } | {
+        date: string;
+        topic: string | null;
+        training_type: string | null;
+      }[] | null;
+    }) => {
       const tr = Array.isArray(r.trainings) ? r.trainings[0] : r.trainings;
       const sv = surveyMap.get(r.training_id);
       return {
@@ -329,8 +354,8 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
         avgSatisfaction,
       },
     };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Błąd pobierania profilu" };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Błąd pobierania profilu") };
   }
 }
 
@@ -350,7 +375,7 @@ export async function getTeamPlayersList(teamId: string) {
     }
 
     return { success: true, players: data };
-  } catch (err: any) {
-    return { success: false, error: err.message, players: [] };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udało się pobrać zawodników."), players: [] };
   }
 }

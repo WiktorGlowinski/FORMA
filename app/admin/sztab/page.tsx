@@ -13,7 +13,7 @@ export default async function AdminCoachesPage() {
   await connection();
 
   const coachesRes = await getClubCoachesAction();
-  const coaches = coachesRes.success ? (coachesRes.coaches as any[]) : [];
+  const coaches = coachesRes.success ? coachesRes.coaches : [];
 
   return <CoachesManager initialCoaches={coaches} />;
 }

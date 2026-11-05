@@ -1,19 +1,45 @@
 import { create } from "zustand";
 import type { DbTrainingCard } from "@/app/actions/coach";
+import type { InjuryKind, Mark, SquadPlayer } from "@/components/coach/data";
+
+interface CachedEvaluationData {
+  training: {
+    id: string;
+    teamName: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    place: string;
+    topic?: string;
+    status: string;
+    surveyEnabled?: boolean;
+    isOwner?: boolean;
+    leadCoachName?: string;
+  };
+  squad: Array<SquadPlayer & {
+    avatarUrl?: string | null;
+    parentName?: string | null;
+    parentPhone?: string | null;
+    phone?: string | null;
+    isGuest?: boolean;
+  }>;
+  initialMarks: Record<string, Mark>;
+  previousInjuries?: Record<string, InjuryKind>;
+}
 
 interface CoachState {
   currentCoachId: string | null;
   trainings: DbTrainingCard[] | null;
   teams: { id: string; name: string }[] | null;
-  evaluationsCache: Record<string, any>;
+  evaluationsCache: Record<string, CachedEvaluationData>;
 
   setTrainingsData: (
     coachId: string | null | undefined, // <--- dopuszczamy undefined/null
     trainings: DbTrainingCard[],
     teams: { id: string; name: string }[]
   ) => void;
-  cacheEvaluationData: (trainingId: string, data: any) => void;
-  updateMarkInCache: (trainingId: string, playerId: string, mark: any) => void;
+  cacheEvaluationData: (trainingId: string, data: CachedEvaluationData) => void;
+  updateMarkInCache: (trainingId: string, playerId: string, mark: Mark) => void;
   resetCachedMarks: (trainingId: string) => void;
   updateCachedSurveyStatus: (trainingId: string, enabled: boolean) => void;
   invalidateCache: () => void;

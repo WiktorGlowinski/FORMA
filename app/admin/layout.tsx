@@ -35,7 +35,7 @@ export default async function AdminLayout({
   const clubName = clubObj?.name || "Klub Partnerski";
 
   return (
-    <div className="relative flex min-h-screen flex-1 flex-col overflow-x-hidden bg-background text-foreground">
+    <div className="relative flex min-h-screen flex-1 flex-col overflow-x-clip bg-background text-foreground">
       {/* LINIE BOISKA FORMY W TLE */}
       <PitchArt className="pointer-events-none fixed top-16 -right-[15%] w-[680px] text-foreground/10 select-none opacity-60 block" />
       <PitchArt className="pointer-events-none fixed bottom-0 -left-[20%] w-[600px] text-foreground/10 select-none opacity-40 hidden md:block rotate-180" />

@@ -4,6 +4,19 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase-server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+  return fallback;
+}
+
 async function requireAdmin() {
   const supabase = await createClient();
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
@@ -60,10 +73,10 @@ export async function getAdminDashboardAction() {
         totalCoaches: (coachesRes.data || []).length,
       },
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
-      error: err.message,
+      error: getErrorMessage(err, "Nie udalo sie wykonac operacji."),
       club: null,
       currentSeason: "Brak danych",
       metrics: { totalTeams: 0, activeTeams: 0, totalPlayers: 0, activePlayers: 0, totalCoaches: 0 },
@@ -98,8 +111,68 @@ export async function getAdminTeamsAction() {
 
     if (error) throw error;
     return { success: true, teams: teams || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, teams: [] };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), teams: [] };
+  }
+}
+
+export async function getClubFieldsAction() {
+  try {
+    const { clubId } = await requireAdmin();
+    const supabase = await createClient();
+
+    const { data: fields, error } = await supabase
+      .from("club_fields")
+      .select("id, name, is_active")
+      .eq("club_id", clubId)
+      .order("name");
+
+    if (error) throw error;
+    return { success: true, fields: fields || [] };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error: getErrorMessage(err, "Nie udało się pobrać boisk."),
+      fields: [],
+    };
+  }
+}
+
+export async function createClubFieldAction(name: string) {
+  try {
+    const { clubId } = await requireAdmin();
+    if (typeof name !== "string") {
+      return { success: false, error: "Podaj prawidłową nazwę boiska." };
+    }
+
+    const normalizedName = name.trim();
+
+    if (!normalizedName || normalizedName.length > 100) {
+      return { success: false, error: "Nazwa boiska musi mieć od 1 do 100 znaków." };
+    }
+
+    const supabase = await createClient();
+    const { data: field, error } = await supabase
+      .from("club_fields")
+      .insert({ club_id: clubId, name: normalizedName })
+      .select("id, name, is_active")
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return { success: false, error: "Boisko o tej nazwie już istnieje." };
+      }
+      throw error;
+    }
+
+    revalidatePath("/admin/boiska");
+    revalidatePath("/trener");
+    return { success: true, field };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error: getErrorMessage(err, "Nie udało się dodać boiska."),
+    };
   }
 }
 
@@ -132,8 +205,8 @@ export async function createTeamAction(payload: { name: string; ageGroup: string
     revalidatePath("/admin/druzyny");
     revalidatePath("/admin");
     return { success: true, teamId: data.id };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -163,7 +236,19 @@ export async function getClubCoachesAction() {
 
     if (error) throw error;
 
-    const formattedCoaches = (coaches || []).map((c: any) => ({
+    const formattedCoaches = (coaches || []).map((c: {
+      id: string;
+      full_name: string;
+      email: string;
+      phone: string | null;
+      avatar_url: string | null;
+      is_active: boolean;
+      created_at: string;
+      team_coaches: Array<{
+        is_primary: boolean;
+        teams: { id: string; name: string; age_group: string | null }[] | null;
+      }> | null;
+    }) => ({
       id: c.id,
       fullName: c.full_name,
       email: c.email,
@@ -171,20 +256,20 @@ export async function getClubCoachesAction() {
       avatarUrl: c.avatar_url,
       isActive: c.is_active,
       createdAt: c.created_at,
-      assignedTeams: (c.team_coaches || []).map((tc: any) => {
+      assignedTeams: (c.team_coaches || []).flatMap((tc) => {
         const t = Array.isArray(tc.teams) ? tc.teams[0] : tc.teams;
-        return {
+        return t ? [{
           id: t?.id,
           name: t?.name,
           ageGroup: t?.age_group,
           isPrimary: tc.is_primary,
-        };
+        }] : [];
       }),
     }));
 
     return { success: true, coaches: formattedCoaches };
-  } catch (err: any) {
-    return { success: false, error: err.message, coaches: [] };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), coaches: [] };
   }
 }
 
@@ -223,7 +308,7 @@ export async function updateCoachAction(payload: {
     const phone = payload.phone?.trim() || null;
     const avatarUrl = payload.avatarUrl?.trim() || null;
 
-    const authUpdatePayload: any = {
+    const authUpdatePayload: Parameters<typeof supabaseAdmin.auth.admin.updateUserById>[1] = {
       email,
       user_metadata: { full_name: fullName, avatar_url: avatarUrl },
     };
@@ -267,8 +352,8 @@ export async function updateCoachAction(payload: {
     revalidatePath("/admin");
 
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -306,8 +391,8 @@ export async function deleteCoachAction(coachId: string) {
     revalidatePath("/admin");
 
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -320,8 +405,8 @@ export async function logAuditEvent(payload: {
   action: string;
   entityType: string;
   entityId?: string;
-  oldData?: any;
-  newData?: any;
+  oldData?: unknown;
+  newData?: unknown;
 }) {
   try {
     await supabaseAdmin.from("audit_logs").insert({
@@ -365,7 +450,16 @@ export async function getClubAuditLogsAction(limit = 100) {
 
     if (error) throw error;
 
-    const formattedLogs = (logs || []).map((l: any) => ({
+    const formattedLogs = (logs || []).map((l: {
+      id: string;
+      action: string;
+      entity_type: string;
+      entity_id: string | null;
+      old_data: unknown;
+      new_data: unknown;
+      created_at: string;
+      profiles: { full_name: string | null; email: string | null }[];
+    }) => ({
       id: l.id,
       action: l.action,
       entityType: l.entity_type,
@@ -373,13 +467,13 @@ export async function getClubAuditLogsAction(limit = 100) {
       oldData: l.old_data,
       newData: l.new_data,
       createdAt: l.created_at,
-      authorName: l.profiles?.full_name || "System",
-      authorEmail: l.profiles?.email || null,
+      authorName: l.profiles[0]?.full_name || "System",
+      authorEmail: l.profiles[0]?.email || null,
     }));
 
     return { success: true, logs: formattedLogs };
-  } catch (err: any) {
-    return { success: false, error: err.message, logs: [] };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), logs: [] };
   }
 }
 
@@ -408,8 +502,8 @@ export async function updateClubLogoAction(logoUrl: string | null) {
     revalidatePath("/admin");
 
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Błąd podczas zapisu herbu." };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Błąd podczas zapisu herbu.") };
   }
 }
 
@@ -483,8 +577,8 @@ export async function createCoachAccountAction(payload: {
         avatar_url: avatarUrl,
       } 
     };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -520,8 +614,8 @@ export async function assignCoachToTeamAction(payload: {
 
     revalidatePath("/admin/druzyny");
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -540,8 +634,8 @@ export async function removeCoachFromTeamAction(teamId: string, coachId: string)
 
     revalidatePath("/admin/druzyny");
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -578,8 +672,8 @@ export async function getAdminPlayersAction() {
 
     if (error) throw error;
     return { success: true, players: players || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, players: [] };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), players: [] };
   }
 }
 
@@ -656,8 +750,8 @@ export async function createPlayerAction(payload: {
     revalidatePath("/admin/zawodnicy");
     revalidatePath("/admin");
     return { success: true, playerId: player.id };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -710,8 +804,32 @@ export async function updatePlayerAction(payload: {
     revalidatePath("/admin/druzyny");
     revalidatePath("/admin");
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
+  }
+}
+
+export async function transferPlayerToTeamAction(playerId: string, teamId: string) {
+  try {
+    const { clubId } = await requireAdmin();
+    if (!playerId || !teamId) {
+      return { success: false, error: "Wybierz zawodnika i drużynę docelową." };
+    }
+
+    const { error } = await supabaseAdmin.rpc("transfer_player_to_team", {
+      p_club_id: clubId,
+      p_player_id: playerId,
+      p_team_id: teamId,
+    });
+
+    if (error) throw error;
+
+    revalidatePath("/admin/zawodnicy");
+    revalidatePath("/admin/druzyny");
+    revalidatePath("/admin");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udało się przenieść zawodnika.") };
   }
 }
 
@@ -783,8 +901,8 @@ export async function bulkImportPlayersAction(
     revalidatePath("/admin/druzyny");
     revalidatePath("/admin");
     return { success: true, count: records.length };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -804,8 +922,8 @@ export async function getClubSeasonsAction() {
 
     if (error) throw error;
     return { success: true, seasons: seasons || [] };
-  } catch (err: any) {
-    return { success: false, error: err.message, seasons: [] };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), seasons: [] };
   }
 }
 
@@ -838,8 +956,8 @@ export async function createAndActivateSeasonAction(payload: {
     revalidatePath("/admin/seasons");
     revalidatePath("/admin/sezony");
     return { success: true, seasonId: data.id };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 /**
@@ -862,8 +980,8 @@ export async function updatePlayerAvatarAction(playerId: string, avatarUrl: stri
 
     revalidatePath("/admin/zawodnicy");
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }
 
@@ -886,7 +1004,7 @@ export async function setCurrentSeasonAction(seasonId: string) {
     revalidatePath("/admin/seasons");
     revalidatePath("/admin/sezony");
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
   }
 }

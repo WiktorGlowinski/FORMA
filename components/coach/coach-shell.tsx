@@ -2,7 +2,7 @@
 
 import { Suspense } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { LogOut, Users, Dumbbell } from "lucide-react";
 import { PitchArt, PitchMark } from "@/components/landing/mark";
 import { signOutAction } from "@/app/actions/auth";
@@ -64,11 +64,12 @@ function CoachNavFallback() {
 
 export function CoachShell({ children }: { children: React.ReactNode }) {
   const invalidateCache = useCoachStore((state) => state.invalidateCache);
+  const router = useRouter();
 
   async function handleSignOut() {
     invalidateCache();
     await signOutAction();
-    window.location.href = "/login";
+    router.push("/login");
   }
 
   return (

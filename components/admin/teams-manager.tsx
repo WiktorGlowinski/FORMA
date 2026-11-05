@@ -25,10 +25,9 @@ export interface AvailableCoach {
   phone?: string | null;
   avatarUrl?: string | null;
   avatar_url?: string | null;
-  [key: string]: any;
 }
 
-interface CoachAssignment {
+export interface CoachAssignment {
   coach_id: string;
   is_primary: boolean;
   profiles: {
@@ -39,7 +38,7 @@ interface CoachAssignment {
   } | null;
 }
 
-interface TeamItem {
+export interface TeamItem {
   id: string;
   name: string;
   age_group: string;
@@ -63,7 +62,7 @@ export function TeamsManager({
   initialTeams,
   availableCoaches,
 }: {
-  initialTeams: any[];
+  initialTeams: TeamItem[];
   availableCoaches: AvailableCoach[];
 }) {
   const [teams, setTeams] = useState<TeamItem[]>(initialTeams);

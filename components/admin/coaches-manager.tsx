@@ -14,7 +14,6 @@ import {
   Edit2,
   Trash2,
   Camera,
-  Upload,
   Loader2,
   AlertTriangle
 } from "lucide-react";
@@ -28,7 +27,7 @@ import { uploadImageAction } from "@/app/actions/upload";
 interface AssignedTeamInfo {
   id: string;
   name: string;
-  ageGroup: string;
+  ageGroup: string | null;
   isPrimary: boolean;
 }
 

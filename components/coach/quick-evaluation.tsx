@@ -41,7 +41,9 @@ import {
   ratedCount,
   type AbsenceReason,
   type Mark,
+  type InjuryKind,
   type SquadPlayer,
+  injuryLabel,
 } from "@/components/coach/data";
 import { InjuryIcon } from "@/components/coach/injury-icon";
 import {
@@ -89,6 +91,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   } = useCoachStore();
 
   const cached = evaluationsCache[trainingId];
+  const cachedRef = useRef(cached);
 
   const [loading, setLoading] = useState(!cached);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -108,6 +111,10 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   } | null>(cached?.training || null);
   const [players, setPlayers] = useState<EvaluationPlayer[]>(cached?.squad || []);
   const [marks, setMarks] = useState<Record<string, Mark>>(cached?.initialMarks || {});
+  const [previousInjuries, setPreviousInjuries] = useState<Record<string, InjuryKind>>(
+    cached?.previousInjuries || {}
+  );
+  const [dismissedInjuryPrompts, setDismissedInjuryPrompts] = useState<Record<string, boolean>>({});
   const [surveySummary, setSurveySummary] = useState<SurveySummary | null>(null);
   const [index, setIndex] = useState(0);
 
@@ -184,7 +191,11 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     } finally {
       flushInProgressRef.current = false;
     }
-  }, [trainingId, STORAGE_KEY_QUEUE]);
+  }, [STORAGE_KEY_QUEUE]);
+
+  useEffect(() => {
+    cachedRef.current = cached;
+  }, [cached]);
 
   // BR-021: Nasłuch przywrócenia połączenia sieciowego
   useEffect(() => {
@@ -213,8 +224,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       try {
         const q = JSON.parse(rawQueue);
         if (q.length > 0) {
-          setPendingQueueCount(q.length);
-          flushOfflineQueue();
+          void Promise.resolve().then(() => flushOfflineQueue());
         }
       } catch {}
     }
@@ -227,14 +237,14 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     };
   }, [flushOfflineQueue, STORAGE_KEY_QUEUE]);
 
-  async function fetchEvaluationData(initialLoad = false) {
+  const fetchEvaluationData = useCallback(async (initialLoad = false) => {
     if (!trainingId) {
       setErrorMsg("Brak identyfikatora jednostki treningowej.");
       setLoading(false);
       return;
     }
 
-    if (initialLoad && !cached) {
+    if (initialLoad && !cachedRef.current) {
       setLoading(true);
     }
     setErrorMsg(null);
@@ -242,7 +252,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     const res = await getTrainingEvaluationDataAction(trainingId);
 
     if (!res.success) {
-      if (initialLoad && !cached) {
+      if (initialLoad && !cachedRef.current) {
         setErrorMsg(res.error || "Nie udało się pobrać jednostki.");
       }
     } else if (res.training && res.squad) {
@@ -269,12 +279,15 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       setTraining(res.training);
       setPlayers(squad);
       setMarks(initialMarks);
+      setPreviousInjuries(res.previousInjuries || {});
+      setDismissedInjuryPrompts({});
       setSurveySummary(res.surveySummary || null);
 
       cacheEvaluationData(trainingId, {
         training: res.training,
         squad,
         initialMarks,
+        previousInjuries: res.previousInjuries || {},
       });
 
       // BR-021: Wznawianie pozycji z localStorage lub pierwszego nieocenionego
@@ -295,11 +308,16 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       }
     }
     setLoading(false);
-  }
+  }, [
+    cacheEvaluationData,
+    STORAGE_KEY_INDEX,
+    STORAGE_KEY_QUEUE,
+    trainingId,
+  ]);
 
   useEffect(() => {
-    fetchEvaluationData(true);
-  }, [trainingId]);
+    void Promise.resolve().then(() => fetchEvaluationData(true));
+  }, [fetchEvaluationData]);
 
   if (loading) {
     return <p className="text-sm text-muted-foreground font-mono">Ładowanie protokołu jednostki…</p>;
@@ -456,12 +474,15 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       setTraining(res.training);
       setPlayers(squad);
       setMarks(initialMarks);
+      setPreviousInjuries(res.previousInjuries || {});
+      setDismissedInjuryPrompts({});
       setSurveySummary(res.surveySummary || null);
 
       cacheEvaluationData(trainingId, {
         training: res.training,
         squad,
         initialMarks,
+        previousInjuries: res.previousInjuries || {},
       });
 
       const firstUnrated = squad.findIndex((p) => !initialMarks[p.id]);
@@ -617,6 +638,48 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
                 setAbsenceModalOpen(true);
               }}
             />
+
+            {isOwner &&
+              !marks[player.id] &&
+              previousInjuries[player.id] &&
+              !dismissedInjuryPrompts[player.id] && (
+                <div className="mt-4 rounded-xl border-2 border-destructive/40 bg-destructive/5 p-3.5">
+                  <div className="flex items-center gap-2">
+                    <InjuryIcon
+                      kind={previousInjuries[player.id]}
+                      className="size-6 shrink-0 text-destructive"
+                    />
+                    <p className="text-sm leading-snug">
+                      Na poprzednim treningu odnotowano kontuzję:{" "}
+                      <strong>{injuryLabel(previousInjuries[player.id])}</strong>. Czy nadal ją posiada?
+                    </p>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        commit({
+                          type: "absence",
+                          reason: "injury",
+                          injury: previousInjuries[player.id],
+                        })
+                      }
+                      className="min-h-10 rounded-lg border-2 border-destructive bg-destructive px-3 py-2 text-xs font-bold text-destructive-foreground transition active:scale-95"
+                    >
+                      Tak, oznacz ponownie
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDismissedInjuryPrompts((current) => ({ ...current, [player.id]: true }))
+                      }
+                      className="min-h-10 rounded-lg border-2 border-foreground/20 bg-background px-3 py-2 text-xs font-bold transition active:scale-95"
+                    >
+                      Nie, oceń normalnie
+                    </button>
+                  </div>
+                </div>
+              )}
 
             <div className="mt-4 flex flex-col items-center gap-2.5">
               <div className="flex w-full items-center justify-center gap-3">
@@ -954,7 +1017,7 @@ function TinderCard({
     }
   }
 
-  function handlePointerUp(e: React.PointerEvent) {
+  function handlePointerUp() {
     if (!isDragging || flyDirection || disabled) return;
     setIsDragging(false);
 

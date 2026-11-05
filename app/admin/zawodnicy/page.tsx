@@ -23,9 +23,22 @@ export default async function AdminPlayersPage() {
   const teams = (teamsRes.teams || []).map((t) => ({
     id: t.id,
     name: t.name,
+    is_active: t.is_active,
   }));
 
-  const players = (playersRes.players || []).map((p: any) => ({
+  const players = (playersRes.players || []).map((p: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    jersey_number: number | null;
+    birth_year: number;
+    avatar_url: string | null;
+    parent_name: string | null;
+    parent_phone: string | null;
+    is_active: boolean;
+    current_team_id: string | null;
+    teams: { id: string; name: string } | { id: string; name: string }[] | null;
+  }) => ({
     id: p.id,
     first_name: p.first_name,
     last_name: p.last_name,
