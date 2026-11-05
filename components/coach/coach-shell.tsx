@@ -8,6 +8,7 @@ import { PitchArt, PitchMark } from "@/components/landing/mark";
 import { signOutAction } from "@/app/actions/auth";
 import { useCoachStore } from "@/store/useCoachStore";
 import { cn } from "@/lib/utils";
+import { AssistantWidget } from "@/components/assistant/assistant-widget";
 
 function CoachNav() {
   const pathname = usePathname();
@@ -62,7 +63,7 @@ function CoachNavFallback() {
   );
 }
 
-export function CoachShell({ children }: { children: React.ReactNode }) {
+export function CoachShell({ children, userId }: { children: React.ReactNode; userId: string }) {
   const invalidateCache = useCoachStore((state) => state.invalidateCache);
   const router = useRouter();
 
@@ -113,6 +114,7 @@ export function CoachShell({ children }: { children: React.ReactNode }) {
       <main className="relative mx-auto w-full max-w-6xl flex-1 px-4 pb-6 pt-20 sm:px-6 sm:pb-8 sm:pt-24">
         {children}
       </main>
+      <AssistantWidget key={userId} userId={userId} />
     </div>
   );
 }

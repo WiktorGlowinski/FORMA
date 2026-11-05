@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase-server";
 import { PitchArt } from "@/components/landing/mark";
 import { AdminNavbar } from "@/components/admin/admin-navbar";
+import { AssistantWidget } from "@/components/assistant/assistant-widget";
 
 export default async function AdminLayout({
   children,
@@ -47,6 +48,7 @@ export default async function AdminLayout({
       <main className="relative mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         {children}
       </main>
+      <AssistantWidget key={user.id} userId={user.id} />
     </div>
   );
 }
