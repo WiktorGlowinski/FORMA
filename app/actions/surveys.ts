@@ -3,6 +3,7 @@
 import { randomUUID } from 'crypto';
 import { createClient } from '@/lib/supabase-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { getErrorMessage } from '@/lib/error-message';
 
 export interface PublicSurveyInfo {
   trainingDate: string;
@@ -29,6 +30,20 @@ interface SurveyTrainingAuthorization {
   team_id: string;
   lead_coach_id: string | null;
 }
+
+type SurveyPlayerJoin = {
+  id: string;
+  first_name: string;
+  last_name: string;
+  jersey_number: number | null;
+};
+
+type PendingSurveyRow = {
+  player_id: string;
+  is_completed: boolean;
+  expires_at: string | null;
+  players: SurveyPlayerJoin | SurveyPlayerJoin[];
+};
 
 async function isAuthorizedSurveyCoach(userId: string, training: SurveyTrainingAuthorization) {
   const { data: profile, error: profileError } = await supabaseAdmin
@@ -111,7 +126,11 @@ export async function getTrainingSurveySession(trainingId: string): Promise<{
     const evalMap = new Map<string, { isGuest: boolean; isPresent: boolean }>();
     const presentPlayerIds = new Set<string>();
 
-    (evals || []).forEach((e: any) => {
+    (evals || []).forEach((e: {
+      player_id: string;
+      is_guest: boolean;
+      is_present: boolean;
+    }) => {
       evalMap.set(e.player_id, {
         isGuest: Boolean(e.is_guest),
         isPresent: Boolean(e.is_present),
@@ -134,7 +153,7 @@ export async function getTrainingSurveySession(trainingId: string): Promise<{
 
     if (survErr) throw survErr;
 
-    const existingSurveyPlayerIds = new Set((existingSurveys || []).map((s: any) => s.player_id));
+    const existingSurveyPlayerIds = new Set((existingSurveys || []).map((s: { player_id: string }) => s.player_id));
 
     // 4. AUTO-HEALING: Jeśli gość lub zawodnik był obecny w evaluations, ale nie ma rekordu w ankietach
     const missingAttendeeIds = Array.from(presentPlayerIds).filter(
@@ -176,7 +195,7 @@ export async function getTrainingSurveySession(trainingId: string): Promise<{
     if (freshError) throw freshError;
 
     const now = new Date();
-    const activeSurveys = (freshSurveys || []).filter((s: any) => {
+    const activeSurveys = (freshSurveys || []).filter((s: PendingSurveyRow) => {
       // Wykluczamy ankiety wygasłe
       if (s.expires_at && new Date(s.expires_at) < now) return false;
       // Wykluczamy zawodników, którzy zostali oznaczeni jako nieobecni w evaluations
@@ -186,7 +205,7 @@ export async function getTrainingSurveySession(trainingId: string): Promise<{
     });
 
     const pendingPlayers = activeSurveys
-      .map((s: any) => {
+      .map((s: PendingSurveyRow) => {
         const p = Array.isArray(s.players) ? s.players[0] : s.players;
         const isGuest = evalMap.get(p.id)?.isGuest ?? false;
         return {
@@ -216,8 +235,8 @@ export async function getTrainingSurveySession(trainingId: string): Promise<{
         pendingPlayers,
       },
     };
-  } catch (err: any) {
-    return { success: false, error: err.message };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, 'Nie udało się obsłużyć ankiety.') };
   }
 }
 

@@ -35,6 +35,13 @@ Platforma odchodzi od subiektywnych, bezwzględnych rankingów „najlepszy / na
 * **Kreator Treningów:** Planowanie i uruchamianie jednostek treningowych (data, ramy czasowe, cel, kategoria).
 * **Tryb Szybkiej Oceny:** Zoptymalizowany pod kątem urządzeń mobilnych widok zawodnik-po-zawodniku umożliwiający ocenienie całej kadry w mniej niż 60 sekund.
 * **Dyspozytor Ankiet:** Generowanie i wysyłka bezpiecznych tokenów RPE do podopiecznych lub ich rodziców.
+* **Asystent AI:** Wyszukiwanie treningów po polskiej dacie, drużynie, miejscu i treści treningu; wyszukiwanie konkretnego zawodnika po imieniu i nazwisku; przygotowanie CSV oraz tworzenie zawodników i treningów z podglądem i potwierdzeniem zapisu.
+
+#### Konfiguracja asystenta AI
+
+Asystent używa Gemini API po stronie serwera. Ustaw `GEMINI_API_KEY` w środowisku serwera (klucz można uzyskać w Google AI Studio); opcjonalnie ustaw `GEMINI_MODEL`, aby wybrać obsługiwany model. Domyślnie używany jest `gemini-3.1-flash-lite`. Nie umieszczaj klucza w zmiennych `NEXT_PUBLIC_*`.
+
+Treść poleceń i historia rozmowy są wysyłane do Google Gemini w celu ich interpretacji. Treści przesyłane w bezpłatnym planie mogą być używane przez Google do ulepszania usług. Nie przekazuj danych, których klub nie może udostępnić dostawcy, ani haseł. Historia asystenta jest zachowywana w `sessionStorage` danej karty przeglądarki do jej zamknięcia i oddzielona dla każdego użytkownika. Limity i dostępność bezpłatnego planu zależą od aktualnych warunków dostawcy. Operacje tworzące dane w aplikacji wymagają osobnego potwierdzenia, a uprawnienia są ponownie weryfikowane podczas zapisu.
 
 ### 3. Moduł Analityczny & Audyt
 * **Widok Zagregowany (`v_player_analytics`):** Natywny widok SQL obliczający w locie frekwencję procentową, rozkład formy (`- / 0 / +`), strukturę kontuzji i absencji oraz średnie wskaźniki samopoczucia.

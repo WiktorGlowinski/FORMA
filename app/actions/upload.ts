@@ -2,6 +2,7 @@
 
 import { randomUUID } from "crypto";
 import { createClient } from "@/lib/supabase-server";
+import { getErrorMessage } from "@/lib/error-message";
 
 export type UploadBucket = "avatars" | "club-assets";
 
@@ -59,7 +60,7 @@ export async function uploadImageAction(formData: FormData) {
       success: true, 
       url: urlData.publicUrl 
     };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Wystąpił nieoczekiwany błąd." };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Wystąpił nieoczekiwany błąd.") };
   }
 }

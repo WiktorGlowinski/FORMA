@@ -10,7 +10,8 @@ import {
   ArrowRight, 
   UserCheck, 
   UserPlus,
-  Plus
+  Plus,
+  MapPin,
 } from "lucide-react";
 import { getAdminDashboardAction } from "@/app/actions/admin";
 
@@ -61,6 +62,14 @@ export default async function AdminDashboardPage() {
           >
             <UserPlus className="size-4 text-primary" />
             <span>Kartoteka</span>
+          </Link>
+
+          <Link
+            href="/admin/boiska"
+            className="inline-flex h-11 items-center gap-2 rounded-xl border-2 border-foreground/20 bg-background px-4 text-xs font-heading uppercase tracking-wider font-bold transition hover:bg-muted active:scale-95 shadow-[2px_2px_0_0_var(--foreground)]"
+          >
+            <MapPin className="size-4 text-primary" />
+            <span>Boiska</span>
           </Link>
 
           <Link
@@ -127,7 +136,7 @@ export default async function AdminDashboardPage() {
         </div>
       </div>
 
-      {/* GŁÓWNE MODUŁY ZARZĄDZANIA (4 DEDYKOWANE KAFELKI) */}
+      {/* GŁÓWNE MODUŁY ZARZĄDZANIA */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* 1. Drużyny & Roczniki */}
         <Link
@@ -225,6 +234,31 @@ export default async function AdminDashboardPage() {
           </div>
           <div className="mt-6 flex items-center gap-1.5 font-mono text-xs font-bold text-foreground group-hover:text-primary transition-colors">
             <span>Zarządzaj cyklem</span>
+            <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-1" />
+          </div>
+        </Link>
+
+        {/* 5. Boiska i obiekty */}
+        <Link
+          href="/admin/boiska"
+          className="group rounded-2xl border-2 border-foreground/20 bg-card p-6 shadow-sm hover:border-foreground hover:shadow-[4px_4px_0_0_var(--foreground)] transition-all flex flex-col justify-between"
+        >
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-primary">
+                Infrastruktura klubu
+              </span>
+              <MapPin className="size-5 text-muted-foreground group-hover:text-primary transition-colors" />
+            </div>
+            <h2 className="mt-2 font-heading text-2xl uppercase tracking-tight">
+              Boiska i obiekty
+            </h2>
+            <p className="mt-1.5 font-mono text-xs text-muted-foreground leading-relaxed">
+              Dodawaj obiekty treningowe dostępne do wyboru przez trenerów przy planowaniu zajęć.
+            </p>
+          </div>
+          <div className="mt-6 flex items-center gap-1.5 font-mono text-xs font-bold text-foreground group-hover:text-primary transition-colors">
+            <span>Zarządzaj boiskami</span>
             <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-1" />
           </div>
         </Link>

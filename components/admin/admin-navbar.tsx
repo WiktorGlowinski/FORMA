@@ -13,7 +13,8 @@ import {
   Layers, 
   Award, 
   Users, 
-  Calendar 
+  Calendar,
+  MapPin,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +28,7 @@ const NAV_LINKS = [
   { href: "/admin/sztab", label: "Sztab", icon: Award },
   { href: "/admin/zawodnicy", label: "Gracze", icon: Users },
   { href: "/admin/sezony", label: "Sezony", icon: Calendar },
+  { href: "/admin/boiska", label: "Boiska", icon: MapPin },
 ];
 
 export function AdminNavbar({ clubName }: AdminNavbarProps) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Plus,
@@ -29,15 +29,18 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { formatTrainingDate, type Mark } from "@/components/coach/data";
 import {
   getCoachTrainingsAction,
+  getCoachFieldsAction,
   createTrainingAction,
   cancelTrainingAction,
   getCoachAlertsAction,
   savePlayerMarkAction,
   type DbTrainingCard,
   type CoachAlertItem,
+  type CoachField,
 } from "@/app/actions/coach";
 import { useCoachStore } from "@/store/useCoachStore";
 import { cn } from "@/lib/utils";
+import { VoiceTextInput } from "@/components/ui/voice-text-input";
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: "Zaplanowany",
@@ -50,13 +53,6 @@ const TIME_SLOTS = [
   { label: "16:00 – 17:15", start: "16:00", end: "17:15" },
   { label: "17:30 – 18:45", start: "17:30", end: "18:45" },
   { label: "19:00 – 20:15", start: "19:00", end: "20:15" },
-];
-
-const QUICK_LOCATIONS = [
-  "Boisko główne",
-  "Boisko boczne A",
-  "Hala Sportowa",
-  "Sztuczna murawa",
 ];
 
 const TRAINING_TYPES = [
@@ -90,6 +86,7 @@ interface OfflineQueueItem {
   trainingId: string;
   playerId: string;
   mark: Mark;
+  note?: string;
   timestamp: number;
 }
 
@@ -102,6 +99,7 @@ function isOfflineQueueItem(value: unknown): value is OfflineQueueItem {
     typeof item.playerId === "string" &&
     typeof item.timestamp === "number" &&
     Number.isFinite(item.timestamp) &&
+    (item.note === undefined || typeof item.note === "string") &&
     Boolean(mark) &&
     (mark?.type === "score" || mark?.type === "absence")
   );
@@ -244,6 +242,7 @@ export function TrainingBoard() {
 
   const [loading, setLoading] = useState(!cachedTrainings);
   const [error, setError] = useState<string | null>(null);
+  const [fields, setFields] = useState<CoachField[]>([]);
   const [pendingEvaluationIds, setPendingEvaluationIds] = useState<Record<string, string[]>>({});
 
   const [activeTab, setActiveTab] = useState<"all" | "pending" | "history">("all");
@@ -265,8 +264,7 @@ export function TrainingBoard() {
   const [customMinute, setCustomMinute] = useState(30);
   const [durationMinutes, setDurationMinutes] = useState(75);
 
-  const [location, setLocation] = useState(QUICK_LOCATIONS[0]);
-  const [customLocation, setCustomLocation] = useState("");
+  const [fieldId, setFieldId] = useState("");
   const [trainingType, setTrainingType] = useState(TRAINING_TYPES[0].id);
   const [status, setStatus] = useState<"completed" | "scheduled">("completed");
   const [topic, setTopic] = useState("");
@@ -279,30 +277,59 @@ export function TrainingBoard() {
 
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
+  const currentCoachIdRef = useRef(currentCoachId);
+  const teamIdRef = useRef(teamId);
+  const fieldIdRef = useRef(fieldId);
 
-  async function loadData(force = false) {
-    if (cachedTrainings && cachedTeams && !force) {
-      setLoading(false);
+  useEffect(() => {
+    currentCoachIdRef.current = currentCoachId;
+    teamIdRef.current = teamId;
+    fieldIdRef.current = fieldId;
+  }, [currentCoachId, teamId, fieldId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const initialToday = getTodayLocalDate();
+      setTodayDate(initialToday);
+      setNowValue(new Date());
+      setCustomDate(initialToday);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const loadData = useCallback(async (force = false) => {
+    if (force) {
+      setLoading(true);
+      setAlertsLoading(true);
     }
 
-    setLoading(true);
-    setAlertsLoading(true);
-
-    const [resTrainings, resAlerts] = await Promise.all([
+    const [resTrainings, resAlerts, resFields] = await Promise.all([
       getCoachTrainingsAction(),
       getCoachAlertsAction(),
+      getCoachFieldsAction(),
     ]);
 
+    setError(null);
     if (!resTrainings.success) {
       setError(resTrainings.error || "Nie udało się załadować jednostek.");
     } else {
-      if (currentCoachId && currentCoachId !== resTrainings.currentCoachId) {
+      if (currentCoachIdRef.current && currentCoachIdRef.current !== resTrainings.currentCoachId) {
         invalidateCache();
       }
 
       setTrainingsData(resTrainings.currentCoachId, resTrainings.trainings, resTrainings.teams);
-      if (resTrainings.teams.length > 0 && !teamId) {
+      if (resTrainings.teams.length > 0 && !teamIdRef.current) {
         setTeamId(resTrainings.teams[0].id);
+      }
+    }
+
+    if (!resFields.success) {
+      setError(resFields.error || "Nie udało się załadować listy boisk.");
+    } else {
+      setFields(resFields.fields);
+      if (!resFields.fields.some((field) => field.id === fieldIdRef.current)) {
+        setFieldId(resFields.fields[0]?.id || "");
       }
     }
 
@@ -311,15 +338,14 @@ export function TrainingBoard() {
     }
     setAlertsLoading(false);
     setLoading(false);
-  }
+  }, [
+    invalidateCache,
+    setTrainingsData,
+  ]);
 
   useEffect(() => {
-    const initialToday = getTodayLocalDate();
-    setTodayDate(initialToday);
-    setNowValue(new Date());
-    setCustomDate(initialToday);
-    loadData();
-  }, []);
+    void Promise.resolve().then(() => loadData());
+  }, [loadData]);
 
   useEffect(() => {
     function loadPendingEvaluationIds() {
@@ -380,7 +406,12 @@ export function TrainingBoard() {
           const failedTimestamps = new Set<number>();
           for (const item of queue) {
             try {
-              const result = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark);
+              const result = await savePlayerMarkAction(
+                item.trainingId,
+                item.playerId,
+                item.mark,
+                item.note || ""
+              );
               if (!result.success) {
                 failedTimestamps.add(item.timestamp);
                 console.error("Automatyczny zapis oceny nie powiódł się:", result.error);
@@ -451,12 +482,6 @@ export function TrainingBoard() {
   }, [setTrainingsData]);
 
   useEffect(() => {
-    if (teams.length > 0 && !teamId) {
-      setTeamId(teams[0].id);
-    }
-  }, [teams, teamId]);
-
-  useEffect(() => {
     const originalBodyOverflow = document.body.style.overflow;
     const originalHtmlOverflow = document.documentElement.style.overflow;
 
@@ -475,6 +500,10 @@ export function TrainingBoard() {
   }, [isWizardOpen]);
 
   function handleOpenWizard() {
+    if (fields.length === 0) {
+      alert("Brak dostępnych boisk. Poproś administratora o dodanie boiska.");
+      return;
+    }
     setStep(1);
     setDateType("today");
     setTimeMode("preset");
@@ -507,9 +536,12 @@ export function TrainingBoard() {
       return;
     }
 
-    setSubmitting(true);
-    const finalLocation = customLocation.trim() || location;
+    if (!fields.some((field) => field.id === fieldId)) {
+      alert("Wybierz boisko z listy.");
+      return;
+    }
 
+    setSubmitting(true);
     const finalStart =
       timeMode === "preset"
         ? timeSlot.start
@@ -525,7 +557,7 @@ export function TrainingBoard() {
       date: resolveDate(),
       startTime: `${finalStart}:00`,
       endTime: `${finalEnd}:00`,
-      location: finalLocation,
+      fieldId,
       topic: topic.trim() || undefined,
       mainGoal: mainGoal.trim() || undefined,
       trainingType,
@@ -538,7 +570,6 @@ export function TrainingBoard() {
       setTopic("");
       setMainGoal("");
       setOrgNote("");
-      setCustomLocation("");
       await loadData(true);
     } else {
       alert(res.error || "Wystąpił błąd podczas tworzenia jednostki.");
@@ -573,20 +604,15 @@ export function TrainingBoard() {
 
     if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 60) {
       if (diffX > 0 && step < 3) {
-        setStep((s) => (s + 1) as any);
+        setStep((s) => (s === 1 ? 2 : 3));
       } else if (diffX < 0 && step > 1) {
-        setStep((s) => (s - 1) as any);
+        setStep((s) => (s === 3 ? 2 : 1));
       }
     }
   }
 
   const initialFallbackDate = todayDate || "2025-01-01";
   const safeCustomDate = normalizeCustomDate(customDate || initialFallbackDate, initialFallbackDate);
-  const customDateParts = safeCustomDate.split("-");
-  const currentYear = customDateParts[0] || initialFallbackDate.split("-")[0];
-  const currentMonthNum = Number(customDateParts[1] || "1");
-  const currentDayNum = Number(customDateParts[2] || "1");
-  const daysInCurrentMonth = getDaysInMonth(Number(currentYear), currentMonthNum);
 
   const formattedStart = `${String(customHour).padStart(2, "0")}:${String(customMinute).padStart(2, "0")}`;
   const formattedEnd = calculateEndTime(customHour, customMinute, durationMinutes);
@@ -1431,32 +1457,23 @@ export function TrainingBoard() {
                     <MapPin className="size-3.5" /> Obiekt / Boisko
                   </label>
                   <div className="mt-2 grid grid-cols-2 gap-2">
-                    {QUICK_LOCATIONS.map((loc) => (
+                    {fields.map((field) => (
                       <button
-                        key={loc}
+                        key={field.id}
                         type="button"
-                        onClick={() => {
-                          setLocation(loc);
-                          setCustomLocation("");
-                        }}
+                        onClick={() => setFieldId(field.id)}
+                        aria-pressed={fieldId === field.id}
                         className={cn(
                           "rounded-xl border-2 p-3 text-left text-xs font-semibold transition active:scale-95",
-                          location === loc && !customLocation
+                          fieldId === field.id
                             ? "border-foreground bg-secondary font-bold shadow-[2px_2px_0_0_var(--foreground)]"
                             : "border-foreground/15 bg-card"
                         )}
                       >
-                        {loc}
+                        {field.name}
                       </button>
                     ))}
                   </div>
-                  <input
-                    type="text"
-                    placeholder="Wpisz inne miejsce, jeśli brak powyżej..."
-                    value={customLocation}
-                    onChange={(e) => setCustomLocation(e.target.value)}
-                    className="mt-2 h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 text-xs outline-none focus:border-foreground"
-                  />
                 </div>
               </div>
             )}
@@ -1535,34 +1552,36 @@ export function TrainingBoard() {
 
                 <div>
                   <label className="text-xs font-bold text-muted-foreground uppercase">Temat jednostki</label>
-                  <input
-                    type="text"
+                  <VoiceTextInput
                     value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
+                    onChange={setTopic}
                     placeholder="np. Gra w przewadze po odbiorze piłki"
-                    className="mt-1.5 h-11 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 text-xs outline-none focus:border-foreground"
+                    ariaLabel="Temat jednostki"
+                    className="mt-1.5"
                   />
                 </div>
 
                 <div>
                   <label className="text-xs font-bold text-muted-foreground uppercase">Cel główny mikrocyklu</label>
-                  <input
-                    type="text"
+                  <VoiceTextInput
                     value={mainGoal}
-                    onChange={(e) => setMainGoal(e.target.value)}
+                    onChange={setMainGoal}
                     placeholder="np. Poprawa szybkości reakcji w fazie negatywnej"
-                    className="mt-1.5 h-11 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 text-xs outline-none focus:border-foreground"
+                    ariaLabel="Cel główny mikrocyklu"
+                    className="mt-1.5"
                   />
                 </div>
 
                 <div>
                   <label className="text-xs font-bold text-muted-foreground uppercase">Notatka organizacyjna dla sztabu</label>
-                  <textarea
+                  <VoiceTextInput
+                    multiline
                     rows={2}
                     value={orgNote}
-                    onChange={(e) => setOrgNote(e.target.value)}
+                    onChange={setOrgNote}
                     placeholder="np. Małe bramki z magazynu; ochraniacze obowiązkowe"
-                    className="mt-1.5 w-full rounded-xl border-2 border-foreground/20 bg-background p-2.5 text-xs outline-none focus:border-foreground"
+                    ariaLabel="Notatka organizacyjna dla sztabu"
+                    className="mt-1.5"
                   />
                 </div>
               </div>
@@ -1576,7 +1595,7 @@ export function TrainingBoard() {
                     type="button"
                     variant="outline"
                     className="h-12 px-4 text-xs font-bold"
-                    onClick={() => setStep((s) => (s - 1) as any)}
+                    onClick={() => setStep((s) => (s === 3 ? 2 : 1))}
                   >
                     <ArrowLeft className="mr-1 size-4" /> Wstecz
                   </Button>

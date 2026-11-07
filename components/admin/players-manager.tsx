@@ -2,7 +2,6 @@
 
 import { useState, useRef } from "react";
 import { 
-  Users, 
   UserPlus, 
   FileSpreadsheet, 
   Search, 
@@ -15,12 +14,15 @@ import {
   Loader2,
   Trash2,
   User,
-  CheckCircle2
+  ArrowRightLeft
 } from "lucide-react";
-import { createPlayerAction, updatePlayerAvatarAction } from "@/app/actions/admin";
+import {
+  createPlayerAction,
+  transferPlayerToTeamAction,
+  updatePlayerAvatarAction,
+} from "@/app/actions/admin";
 import { uploadImageAction } from "@/app/actions/upload";
 import { CsvImporterModal } from "@/components/admin/csv-importer";
-import { cn } from "@/lib/utils";
 
 interface PlayerItem {
   id: string;
@@ -44,6 +46,7 @@ interface PlayerItem {
 interface TeamChoice {
   id: string;
   name: string;
+  is_active: boolean;
 }
 
 const MONTHS = [
@@ -103,6 +106,10 @@ export function PlayersManager({
   const [avatarModalPlayer, setAvatarModalPlayer] = useState<PlayerItem | null>(null);
   const [isDirectUploading, setIsDirectUploading] = useState(false);
   const directFileInputRef = useRef<HTMLInputElement>(null);
+  const [transferPlayer, setTransferPlayer] = useState<PlayerItem | null>(null);
+  const [transferTeamId, setTransferTeamId] = useState("");
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const [isTransferring, setIsTransferring] = useState(false);
 
   const numericBirthYear = parseInt(birthYear, 10) || currentYear;
   const isJunior = (currentYear - numericBirthYear) < 18;
@@ -268,6 +275,44 @@ export function PlayersManager({
       alert(res.error || "Błąd podczas usuwania zdjęcia.");
     }
     setIsDirectUploading(false);
+  }
+
+  function openTransferDialog(player: PlayerItem) {
+    const destinations = teams.filter(
+      (team) => team.is_active && team.id !== player.current_team_id
+    );
+    setTransferPlayer(player);
+    setTransferTeamId(destinations[0]?.id || "");
+    setTransferError(null);
+  }
+
+  async function handleTransferPlayer(e: React.FormEvent) {
+    e.preventDefault();
+    if (!transferPlayer || !transferTeamId) return;
+
+    setIsTransferring(true);
+    setTransferError(null);
+    const result = await transferPlayerToTeamAction(transferPlayer.id, transferTeamId);
+
+    if (result.success) {
+      const newTeam = teams.find((team) => team.id === transferTeamId);
+      setPlayers((currentPlayers) =>
+        currentPlayers.map((player) =>
+          player.id === transferPlayer.id
+            ? {
+                ...player,
+                current_team_id: transferTeamId,
+                teams: newTeam ? { id: newTeam.id, name: newTeam.name } : null,
+              }
+            : player
+        )
+      );
+      setTransferPlayer(null);
+    } else {
+      setTransferError(result.error || "Nie udało się przenieść zawodnika.");
+    }
+
+    setIsTransferring(false);
   }
 
   function formatBirthDateDisplay(year: number, dateStr?: string | null) {
@@ -499,15 +544,28 @@ export function PlayersManager({
                         )}
                       </td>
                       <td className="p-4 text-right">
-                        {player.is_active ? (
-                          <span className="inline-block rounded bg-primary/10 border border-primary/30 px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
-                            Aktywny
-                          </span>
-                        ) : (
-                          <span className="inline-block rounded bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-                            Nieaktywny
-                          </span>
-                        )}
+                        <div className="flex flex-col items-end gap-2">
+                          {player.is_active ? (
+                            <span className="inline-block rounded bg-primary/10 border border-primary/30 px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
+                              Aktywny
+                            </span>
+                          ) : (
+                            <span className="inline-block rounded bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                              Nieaktywny
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => openTransferDialog(player)}
+                            disabled={!teams.some(
+                              (team) => team.is_active && team.id !== player.current_team_id
+                            )}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/20 bg-background px-2 py-1 font-heading text-[10px] font-bold uppercase tracking-wide text-foreground transition hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <ArrowRightLeft className="size-3" />
+                            Transferuj
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -517,6 +575,88 @@ export function PlayersManager({
           </table>
         </div>
       </div>
+
+      {transferPlayer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
+          <form
+            onSubmit={handleTransferPlayer}
+            className="w-full max-w-md space-y-5 rounded-2xl border-2 border-foreground bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)]"
+          >
+            <div className="flex items-center justify-between border-b pb-3">
+              <div>
+                <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary">
+                  Zmiana przynależności
+                </p>
+                <h3 className="font-heading text-2xl uppercase tracking-tight">Transfer zawodnika</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTransferPlayer(null)}
+                disabled={isTransferring}
+                aria-label="Zamknij okno transferu"
+                className="rounded-full border p-1 transition hover:bg-muted disabled:opacity-50"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <p className="font-heading text-lg uppercase">
+                {transferPlayer.last_name} {transferPlayer.first_name}
+              </p>
+              <p className="font-mono text-xs text-muted-foreground">
+                {transferPlayer.teams?.name || "Bez drużyny"} → wybierz nową drużynę
+              </p>
+            </div>
+
+            <label className="block space-y-1.5">
+              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                Drużyna docelowa
+              </span>
+              <select
+                value={transferTeamId}
+                onChange={(event) => setTransferTeamId(event.target.value)}
+                required
+                disabled={isTransferring}
+                className="h-11 w-full rounded-xl border-2 border-foreground/15 bg-background px-3 font-mono text-xs outline-none focus:border-foreground disabled:opacity-50"
+              >
+                {teams
+                  .filter((team) => team.is_active && team.id !== transferPlayer.current_team_id)
+                  .map((team) => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            {transferError && (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs font-mono text-destructive">
+                {transferError}
+              </div>
+            )}
+
+            <div className="flex gap-2 border-t pt-4">
+              <button
+                type="button"
+                onClick={() => setTransferPlayer(null)}
+                disabled={isTransferring}
+                className="h-11 flex-1 rounded-xl border-2 border-foreground/20 font-heading text-xs font-bold uppercase transition hover:bg-muted disabled:opacity-50"
+              >
+                Anuluj
+              </button>
+              <button
+                type="submit"
+                disabled={isTransferring || !transferTeamId}
+                className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] transition active:scale-95 disabled:opacity-50"
+              >
+                {isTransferring ? <Loader2 className="size-4 animate-spin" /> : <ArrowRightLeft className="size-4" />}
+                {isTransferring ? "Przenoszenie..." : "Potwierdź transfer"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* MODAL BEZPOŚREDNIEJ EDYCJI ZDJĘCIA GRACZA (PO KLIKNIĘCIU NA GRACZA) */}
       {avatarModalPlayer && (

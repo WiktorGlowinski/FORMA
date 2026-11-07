@@ -41,7 +41,9 @@ import {
   ratedCount,
   type AbsenceReason,
   type Mark,
+  type InjuryKind,
   type SquadPlayer,
+  injuryLabel,
 } from "@/components/coach/data";
 import { InjuryIcon } from "@/components/coach/injury-icon";
 import {
@@ -56,6 +58,7 @@ import {
   submitInPersonSurveyResponse,
 } from "@/app/actions/surveys";
 import { AddGuestPlayerModal } from "@/components/coach/add-guest-player-modal";
+import { VoiceTextInput } from "@/components/ui/voice-text-input";
 import { cn } from "@/lib/utils";
 
 const subscribeToShareSupport = () => () => {};
@@ -75,6 +78,7 @@ interface OfflineQueueItem {
   trainingId: string;
   playerId: string;
   mark: Mark;
+  note?: string;
   timestamp: number;
 }
 
@@ -83,12 +87,14 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     evaluationsCache,
     cacheEvaluationData,
     updateMarkInCache,
+    updateNoteInCache,
     resetCachedMarks,
     updateCachedSurveyStatus,
     invalidateCache,
   } = useCoachStore();
 
   const cached = evaluationsCache[trainingId];
+  const cachedRef = useRef(cached);
 
   const [loading, setLoading] = useState(!cached);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -108,6 +114,11 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   } | null>(cached?.training || null);
   const [players, setPlayers] = useState<EvaluationPlayer[]>(cached?.squad || []);
   const [marks, setMarks] = useState<Record<string, Mark>>(cached?.initialMarks || {});
+  const [notes, setNotes] = useState<Record<string, string>>(cached?.initialNotes || {});
+  const [previousInjuries, setPreviousInjuries] = useState<Record<string, InjuryKind>>(
+    cached?.previousInjuries || {}
+  );
+  const [dismissedInjuryPrompts, setDismissedInjuryPrompts] = useState<Record<string, boolean>>({});
   const [surveySummary, setSurveySummary] = useState<SurveySummary | null>(null);
   const [index, setIndex] = useState(0);
 
@@ -154,7 +165,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
       for (const item of queue) {
         try {
-          const res = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark);
+          const res = await savePlayerMarkAction(item.trainingId, item.playerId, item.mark, item.note || "");
           if (!res.success) {
             failedTimestamps.add(item.timestamp);
           }
@@ -184,7 +195,11 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     } finally {
       flushInProgressRef.current = false;
     }
-  }, [trainingId, STORAGE_KEY_QUEUE]);
+  }, [STORAGE_KEY_QUEUE]);
+
+  useEffect(() => {
+    cachedRef.current = cached;
+  }, [cached]);
 
   // BR-021: Nasłuch przywrócenia połączenia sieciowego
   useEffect(() => {
@@ -213,8 +228,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       try {
         const q = JSON.parse(rawQueue);
         if (q.length > 0) {
-          setPendingQueueCount(q.length);
-          flushOfflineQueue();
+          void Promise.resolve().then(() => flushOfflineQueue());
         }
       } catch {}
     }
@@ -227,14 +241,14 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     };
   }, [flushOfflineQueue, STORAGE_KEY_QUEUE]);
 
-  async function fetchEvaluationData(initialLoad = false) {
+  const fetchEvaluationData = useCallback(async (initialLoad = false) => {
     if (!trainingId) {
       setErrorMsg("Brak identyfikatora jednostki treningowej.");
       setLoading(false);
       return;
     }
 
-    if (initialLoad && !cached) {
+    if (initialLoad && !cachedRef.current) {
       setLoading(true);
     }
     setErrorMsg(null);
@@ -242,13 +256,14 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     const res = await getTrainingEvaluationDataAction(trainingId);
 
     if (!res.success) {
-      if (initialLoad && !cached) {
+      if (initialLoad && !cachedRef.current) {
         setErrorMsg(res.error || "Nie udało się pobrać jednostki.");
       }
     } else if (res.training && res.squad) {
       const squad = res.squad as EvaluationPlayer[];
       const savedMarks = res.initialMarks || {};
       let queuedMarks: Record<string, Mark> = {};
+      let queuedNotes: Record<string, string> = {};
 
       try {
         const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
@@ -260,21 +275,33 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
             result[item.playerId] = item.mark;
             return result;
           }, {});
+        queuedNotes = queue.reduce<Record<string, string>>((result, item) => {
+          if (item.trainingId === trainingId && item.note !== undefined) {
+            result[item.playerId] = item.note;
+          }
+          return result;
+        }, {});
       } catch (storageError) {
         console.error("Nie udało się odtworzyć lokalnych ocen:", storageError);
       }
 
       const initialMarks = { ...savedMarks, ...queuedMarks };
+      const initialNotes = { ...(res.initialNotes || {}), ...queuedNotes };
 
       setTraining(res.training);
       setPlayers(squad);
       setMarks(initialMarks);
+      setNotes(initialNotes);
+      setPreviousInjuries(res.previousInjuries || {});
+      setDismissedInjuryPrompts({});
       setSurveySummary(res.surveySummary || null);
 
       cacheEvaluationData(trainingId, {
         training: res.training,
         squad,
         initialMarks,
+        initialNotes,
+        previousInjuries: res.previousInjuries || {},
       });
 
       // BR-021: Wznawianie pozycji z localStorage lub pierwszego nieocenionego
@@ -295,11 +322,16 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       }
     }
     setLoading(false);
-  }
+  }, [
+    cacheEvaluationData,
+    STORAGE_KEY_INDEX,
+    STORAGE_KEY_QUEUE,
+    trainingId,
+  ]);
 
   useEffect(() => {
-    fetchEvaluationData(true);
-  }, [trainingId]);
+    void Promise.resolve().then(() => fetchEvaluationData(true));
+  }, [fetchEvaluationData]);
 
   if (loading) {
     return <p className="text-sm text-muted-foreground font-mono">Ładowanie protokołu jednostki…</p>;
@@ -334,6 +366,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     }
 
     const nextIndex = Math.min(index + 1, total);
+    const note = notes[player.id] || "";
 
     // 1. Natychmiastowy stan UI i cache Zustand
     setMarks((curr) => ({ ...curr, [player.id]: mark }));
@@ -341,6 +374,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     setSelectedAbsenceReason(null);
     setIndex(nextIndex);
     updateMarkInCache(trainingId, player.id, mark);
+    updateNoteInCache(trainingId, player.id, note);
 
     // 2. BR-021: Zapis pozycji sesji w pamięci urządzenia
     try {
@@ -352,6 +386,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       trainingId,
       playerId: player.id,
       mark,
+      note,
       timestamp: Date.now() + Math.random(),
     };
 
@@ -374,7 +409,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     }
 
     try {
-      const res = await savePlayerMarkAction(trainingId, player.id, mark);
+      const res = await savePlayerMarkAction(trainingId, player.id, mark, note);
       if (!res.success) {
         throw new Error(res.error || "Błąd zapisu");
       }
@@ -416,6 +451,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     const res = await resetTrainingEvaluationsAction(trainingId);
     if (res.success) {
       setMarks({});
+      setNotes({});
       setIndex(0);
       setAbsenceModalOpen(false);
       setSelectedAbsenceReason(null);
@@ -456,12 +492,17 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       setTraining(res.training);
       setPlayers(squad);
       setMarks(initialMarks);
+      setNotes(res.initialNotes || {});
+      setPreviousInjuries(res.previousInjuries || {});
+      setDismissedInjuryPrompts({});
       setSurveySummary(res.surveySummary || null);
 
       cacheEvaluationData(trainingId, {
         training: res.training,
         squad,
         initialMarks,
+        initialNotes: res.initialNotes || {},
+        previousInjuries: res.previousInjuries || {},
       });
 
       const firstUnrated = squad.findIndex((p) => !initialMarks[p.id]);
@@ -617,6 +658,74 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
                 setAbsenceModalOpen(true);
               }}
             />
+
+            <div className="mt-4 rounded-xl border border-foreground/15 bg-background p-3">
+              <label
+                htmlFor={`evaluation-note-${player.id}`}
+                className="mb-1.5 block text-xs font-bold uppercase text-muted-foreground"
+              >
+                Notatka do zawodnika
+              </label>
+              <VoiceTextInput
+                id={`evaluation-note-${player.id}`}
+                value={notes[player.id] || ""}
+                onChange={(note) => {
+                  setNotes((current) => ({ ...current, [player.id]: note }));
+                  updateNoteInCache(trainingId, player.id, note);
+                }}
+                placeholder="Dodaj obserwację lub podyktuj notatkę..."
+                ariaLabel={`Notatka do zawodnika ${playerName(player)}`}
+                multiline
+                rows={2}
+                disabled={!isOwner}
+                className="font-mono"
+              />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Notatka zapisze się razem z oceną lub statusem obecności.
+              </p>
+            </div>
+
+            {isOwner &&
+              !marks[player.id] &&
+              previousInjuries[player.id] &&
+              !dismissedInjuryPrompts[player.id] && (
+                <div className="mt-4 rounded-xl border-2 border-destructive/40 bg-destructive/5 p-3.5">
+                  <div className="flex items-center gap-2">
+                    <InjuryIcon
+                      kind={previousInjuries[player.id]}
+                      className="size-6 shrink-0 text-destructive"
+                    />
+                    <p className="text-sm leading-snug">
+                      Na poprzednim treningu odnotowano kontuzję:{" "}
+                      <strong>{injuryLabel(previousInjuries[player.id])}</strong>. Czy nadal ją posiada?
+                    </p>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        commit({
+                          type: "absence",
+                          reason: "injury",
+                          injury: previousInjuries[player.id],
+                        })
+                      }
+                      className="min-h-10 rounded-lg border-2 border-destructive bg-destructive px-3 py-2 text-xs font-bold text-destructive-foreground transition active:scale-95"
+                    >
+                      Tak, oznacz ponownie
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDismissedInjuryPrompts((current) => ({ ...current, [player.id]: true }))
+                      }
+                      className="min-h-10 rounded-lg border-2 border-foreground/20 bg-background px-3 py-2 text-xs font-bold transition active:scale-95"
+                    >
+                      Nie, oceń normalnie
+                    </button>
+                  </div>
+                </div>
+              )}
 
             <div className="mt-4 flex flex-col items-center gap-2.5">
               <div className="flex w-full items-center justify-center gap-3">
@@ -954,7 +1063,7 @@ function TinderCard({
     }
   }
 
-  function handlePointerUp(e: React.PointerEvent) {
+  function handlePointerUp() {
     if (!isDragging || flyDirection || disabled) return;
     setIsDragging(false);
 
