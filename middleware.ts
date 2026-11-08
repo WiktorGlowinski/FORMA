@@ -8,7 +8,8 @@ export async function middleware(request: NextRequest) {
     pathname === '/' ||
     pathname.startsWith('/survey') ||
     pathname.startsWith('/ankieta') ||
-    pathname.startsWith('/login');
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/reset-hasla');
 
   let response = NextResponse.next({ request: { headers: request.headers } });
 

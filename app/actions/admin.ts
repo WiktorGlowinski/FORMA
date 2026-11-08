@@ -55,7 +55,11 @@ export async function getAdminDashboardAction() {
       supabase.from("seasons").select("id, name").eq("club_id", clubId).eq("is_current", true).maybeSingle(),
       supabase.from("teams").select("id, name, is_active").eq("club_id", clubId),
       supabase.from("players").select("id, is_active").eq("club_id", clubId),
-      supabase.from("profiles").select("id").eq("club_id", clubId).eq("role", "coach"),
+      supabase
+        .from("profiles")
+        .select("id")
+        .eq("club_id", clubId)
+        .in("role", ["coach", "coordinator"]),
     ]);
 
     const teams = teamsRes.data || [];
@@ -224,6 +228,7 @@ export async function getClubCoachesAction() {
         phone,
         avatar_url,
         is_active,
+        role,
         created_at,
         team_coaches (
           is_primary,
@@ -231,7 +236,7 @@ export async function getClubCoachesAction() {
         )
       `)
       .eq("club_id", clubId)
-      .eq("role", "coach")
+      .in("role", ["coach", "coordinator"])
       .order("full_name");
 
     if (error) throw error;
@@ -243,6 +248,7 @@ export async function getClubCoachesAction() {
       phone: string | null;
       avatar_url: string | null;
       is_active: boolean;
+      role: "coach" | "coordinator";
       created_at: string;
       team_coaches: Array<{
         is_primary: boolean;
@@ -255,6 +261,7 @@ export async function getClubCoachesAction() {
       phone: c.phone,
       avatarUrl: c.avatar_url,
       isActive: c.is_active,
+      role: c.role,
       createdAt: c.created_at,
       assignedTeams: (c.team_coaches || []).flatMap((tc) => {
         const t = Array.isArray(tc.teams) ? tc.teams[0] : tc.teams;
@@ -274,7 +281,7 @@ export async function getClubCoachesAction() {
 }
 
 /**
- * Aktualizuje dane trenera w profiles oraz (opcjonalnie) hasło/email w auth.users
+ * Aktualizuje dane członka sztabu w profiles oraz email w auth.users
  */
 export async function updateCoachAction(payload: {
   coachId: string;
@@ -282,7 +289,6 @@ export async function updateCoachAction(payload: {
   email: string;
   phone?: string;
   avatarUrl?: string;
-  newPassword?: string;
   isActive?: boolean;
 }) {
   try {
@@ -312,10 +318,6 @@ export async function updateCoachAction(payload: {
       email,
       user_metadata: { full_name: fullName, avatar_url: avatarUrl },
     };
-
-    if (payload.newPassword && payload.newPassword.trim().length >= 6) {
-      authUpdatePayload.password = payload.newPassword.trim();
-    }
 
     const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(
       payload.coachId,
@@ -437,8 +439,8 @@ export async function getClubAuditLogsAction(limit = 100) {
       .select(`
         id,
         action,
-        entity_type,
-        entity_id,
+        table_name,
+        record_id,
         old_data,
         new_data,
         created_at,
@@ -453,8 +455,8 @@ export async function getClubAuditLogsAction(limit = 100) {
     const formattedLogs = (logs || []).map((l: {
       id: string;
       action: string;
-      entity_type: string;
-      entity_id: string | null;
+      table_name: string;
+      record_id: string | null;
       old_data: unknown;
       new_data: unknown;
       created_at: string;
@@ -462,8 +464,8 @@ export async function getClubAuditLogsAction(limit = 100) {
     }) => ({
       id: l.id,
       action: l.action,
-      entityType: l.entity_type,
-      entityId: l.entity_id,
+      entityType: l.table_name,
+      entityId: l.record_id,
       oldData: l.old_data,
       newData: l.new_data,
       createdAt: l.created_at,
@@ -514,6 +516,7 @@ export async function createCoachAccountAction(payload: {
   fullName: string;
   email: string;
   password: string;
+  role?: "coach" | "coordinator";
   phone?: string;
   avatarUrl?: string;
 }) {
@@ -524,6 +527,7 @@ export async function createCoachAccountAction(payload: {
     const fullName = payload.fullName.trim();
     const phone = payload.phone?.trim() || null;
     const avatarUrl = payload.avatarUrl?.trim() || null;
+    const role = payload.role || "coach";
 
     if (payload.password.length < 6) {
       return { success: false, error: "Hasło musi mieć co najmniej 6 znaków." };
@@ -536,6 +540,7 @@ export async function createCoachAccountAction(payload: {
       user_metadata: { 
         full_name: fullName,
         avatar_url: avatarUrl,
+        must_change_password: true,
       },
     });
 
@@ -554,7 +559,7 @@ export async function createCoachAccountAction(payload: {
         full_name: fullName,
         phone,
         avatar_url: avatarUrl,
-        role: "coach",
+        role,
         is_active: true,
       });
 
@@ -575,6 +580,7 @@ export async function createCoachAccountAction(payload: {
         email,
         phone,
         avatar_url: avatarUrl,
+        role,
       } 
     };
   } catch (err: unknown) {
@@ -590,6 +596,19 @@ export async function assignCoachToTeamAction(payload: {
   try {
     const { clubId } = await requireAdmin();
     const supabase = await createClient();
+
+    const { data: coach, error: coachError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", payload.coachId)
+      .eq("club_id", clubId)
+      .eq("role", "coach")
+      .maybeSingle();
+
+    if (coachError) throw coachError;
+    if (!coach) {
+      return { success: false, error: "Do drużyny można przypisać wyłącznie trenera z tego klubu." };
+    }
 
     const { data: existing } = await supabase
       .from("team_coaches")

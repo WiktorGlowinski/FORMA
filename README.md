@@ -39,13 +39,18 @@ Platforma odchodzi od subiektywnych, bezwzględnych rankingów „najlepszy / na
 
 #### Konfiguracja asystenta AI
 
-Asystent używa Gemini API po stronie serwera. Ustaw `GEMINI_API_KEY` w środowisku serwera (klucz można uzyskać w Google AI Studio); opcjonalnie ustaw `GEMINI_MODEL`, aby wybrać obsługiwany model. Domyślnie używany jest `gemini-3.1-flash-lite`. Nie umieszczaj klucza w zmiennych `NEXT_PUBLIC_*`.
+Asystent używa Gemini API po stronie serwera. Ustaw `GEMINI_API_KEY` w środowisku serwera (klucz można uzyskać w Google AI Studio); opcjonalnie ustaw `GEMINI_MODEL`, aby wybrać obsługiwany model. Domyślnie używany jest szybki `gemini-3.5-flash-lite`, a przy niedostępności modelu aplikacja próbuje `gemini-3.5-flash` i `gemini-3.1-flash-lite`. Nie umieszczaj klucza w zmiennych `NEXT_PUBLIC_*`.
 
 Treść poleceń i historia rozmowy są wysyłane do Google Gemini w celu ich interpretacji. Treści przesyłane w bezpłatnym planie mogą być używane przez Google do ulepszania usług. Nie przekazuj danych, których klub nie może udostępnić dostawcy, ani haseł. Historia asystenta jest zachowywana w `sessionStorage` danej karty przeglądarki do jej zamknięcia i oddzielona dla każdego użytkownika. Limity i dostępność bezpłatnego planu zależą od aktualnych warunków dostawcy. Operacje tworzące dane w aplikacji wymagają osobnego potwierdzenia, a uprawnienia są ponownie weryfikowane podczas zapisu.
 
 ### 3. Moduł Analityczny & Audyt
 * **Widok Zagregowany (`v_player_analytics`):** Natywny widok SQL obliczający w locie frekwencję procentową, rozkład formy (`- / 0 / +`), strukturę kontuzji i absencji oraz średnie wskaźniki samopoczucia.
 * **Dziennik Zdarzeń (`audit_logs`):** Niezmienna tabela audytowa rejestrująca modyfikacje ocen, usunięcia profili oraz zmiany administracyjne w strukturach klubu.
+
+### 4. Panel Master Admina (`/master-admin`)
+* Tworzenie nowego klubu razem z pierwszym kontem administratora klubu.
+* Globalny podgląd aktywnych klubów.
+* Dostęp do globalnego `audit_logs` z filtrowaniem kontekstowym i rozwijanym dekoderem danych JSON `old_data`/`new_data`. Logi są prezentowane jako dane audytowe; panel nie odszyfrowuje haseł ani sekretów.
 
 ---
 

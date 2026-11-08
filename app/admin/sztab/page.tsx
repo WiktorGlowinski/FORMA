@@ -5,7 +5,7 @@ import { getClubCoachesAction } from "@/app/actions/admin";
 import { CoachesManager } from "@/components/admin/coaches-manager";
 
 export const metadata = {
-  title: "Sztab Trenerski | KS FORMA Bydgoszcz",
+  title: "Sztab | KS FORMA Bydgoszcz",
 };
 
 export default async function AdminCoachesPage() {

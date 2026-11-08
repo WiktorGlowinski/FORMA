@@ -42,7 +42,7 @@ export default async function AdminLayout({
       <PitchArt className="pointer-events-none fixed bottom-0 -left-[20%] w-[600px] text-foreground/10 select-none opacity-40 hidden md:block rotate-180" />
 
       {/* RESPONSYWNY GÓRNY PASEK */}
-      <AdminNavbar clubName={clubName} />
+      <AdminNavbar clubName={clubName} isMasterAdmin={profile.role === "master_admin"} />
 
       {/* GŁÓWNA ZAWARTOŚĆ */}
       <main className="relative mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">

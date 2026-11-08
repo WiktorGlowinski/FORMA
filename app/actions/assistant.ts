@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase-server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { getErrorMessage } from "@/lib/error-message";
 
-type AssistantRole = "coach" | "club_admin" | "master_admin";
+type AssistantRole = "coach" | "coordinator" | "club_admin" | "master_admin";
 
 interface AssistantProfile {
   userId: string;
@@ -45,6 +45,15 @@ export interface AssistantPlayerResult {
   href: string | null;
 }
 
+export interface AssistantTeamResult {
+  id: string;
+  name: string;
+  ageGroup: string | null;
+  playerCount: number;
+  players: AssistantPlayerResult[];
+  href: string | null;
+}
+
 export interface AssistantProposal {
   kind: "create_players";
   teamId: string;
@@ -73,6 +82,7 @@ export interface AssistantReply {
   reply: string;
   trainings?: AssistantTrainingResult[];
   players?: AssistantPlayerResult[];
+  teams?: AssistantTeamResult[];
   csvRecords?: CsvPlayerRecord[];
   proposal?: AssistantPendingAction;
 }
@@ -226,6 +236,12 @@ function deriveTrainingLocation(message: string) {
   return location.replace(/\s+(?:z|w|na|do|dnia)\s*$/iu, "").trim();
 }
 
+function deriveTeamName(message: string) {
+  const afterTeamWord = message.match(/(?:drużyn(?:ę|a|y)|druzyn(?:e|a|y)|kadr(?:ę|a|y)|skład)\s+(.+)/iu)?.[1];
+  if (afterTeamWord) return afterTeamWord.replace(/[?.!,]+$/g, "").trim();
+  return "";
+}
+
 function derivePlayerName(message: string) {
   const match = message.match(
     /(?:zawodnik\w*|zawodniczk\w*|gracz\w*|piłkarz\w*|kartotek\w*|profil\w*)\s+(?:o\s+)?([\p{L}'-]+\s+[\p{L}'-]+(?:\s+[\p{L}'-]+)?)(?=\s+(?:z|w|na|do|drużyny|zespołu)\b|[,.!?]|$)/iu
@@ -330,7 +346,7 @@ async function getAssistantProfile(): Promise<AssistantProfile> {
   if (!profile || profile.is_active === false || !profile.club_id) {
     throw new Error("Profil nie ma aktywnego przypisania do klubu.");
   }
-  if (!["coach", "club_admin", "master_admin"].includes(profile.role)) {
+  if (!["coach", "coordinator", "club_admin", "master_admin"].includes(profile.role)) {
     throw new Error("Asystent jest dostępny dla trenerów i administratorów.");
   }
 
@@ -367,13 +383,21 @@ async function requestAssistantPlan(
   message: string,
   history: AssistantHistoryMessage[]
 ): Promise<AssistantPlan> {
-  const model = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+  const configuredModel = process.env.GEMINI_MODEL?.trim();
+  const models = Array.from(new Set([
+    configuredModel,
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+  ].filter((model): model is string => Boolean(model))));
   const systemInstruction = [
     "Jesteś asystentem aplikacji klubu sportowego FORMA. Odpowiadaj po polsku.",
     "Zwracaj wyłącznie poprawny JSON: {\"reply\": string, \"action\": string, \"data\": object}.",
-    "Dozwolone action: none, search_trainings, search_players, generate_csv, create_players, create_training.",
+    "Dozwolone action: none, search_trainings, search_players, search_team, search_teams, generate_csv, create_players, create_training.",
     "Wyszukiwanie treningów: data zawiera dateStart i dateEnd (YYYY-MM-DD), teamName, topic oraz location. Rozpoznawaj polskie daty, w tym zapis '1 listopada'; bez podanego roku użyj bieżącego roku. Pole location jest obowiązkowe, gdy pytanie zawiera miejsce/boisko/halę. Szukaj tematu również po nazwach typu trening regeneracyjny.",
     "Wyszukiwanie zawodnika: użyj search_players, a data zawiera playerName z pełnym imieniem i nazwiskiem oraz opcjonalne teamName. Szukaj wyłącznie konkretnej osoby, nigdy nie proś o pobranie całej kadry. Jeśli brak nazwiska, dopytaj.",
+    "Cała drużyna/kadra/skład: użyj search_team. data zawiera teamName. Zwróć wszystkich zawodników tej drużyny, gdy użytkownik prosi o całą drużynę, kadrę, skład lub listę zawodników. Nie pokazuj drużyn spoza uprawnień użytkownika.",
+    "Wszystkie drużyny użytkownika/klubu: użyj search_teams, gdy użytkownik pyta o swoje drużyny, wszystkie drużyny, drużyny które obsługuje lub chce listę drużyn. Trener może zobaczyć tylko przypisane drużyny, admin i koordynator cały aktywny klub.",
     "CSV i zawodnicy: data zawiera players jako tablicę obiektów {firstName,lastName,birthYear,jerseyNumber,phone,email,parentName,parentPhone,parentEmail}, oraz opcjonalne teamName. Nigdy nie wymyślaj danych kontaktowych ani numerów; brakujące pola zostaw puste. Rozpoznaj generate_csv dla prośby o plik, create_players dla prośby o zapis zawodników do bazy.",
     "Tworzenie treningu: data zawiera teamName, fieldName, date (YYYY-MM-DD), startTime i endTime (HH:mm), topic, mainGoal, trainingType, organizationalNote. Brakujące wymagane dane dopytaj użytkownika i ustaw action na none.",
     "Jeśli brakuje daty przy wyszukiwaniu albo brakuje informacji potrzebnych do bezpiecznego wykonania zadania, zadaj krótkie pytanie, użyj action none i nie zgaduj.",
@@ -390,30 +414,49 @@ async function requestAssistantPlan(
     { role: "user", parts: [{ text: message }] },
   ];
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": getGeminiApiKey(),
-      },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        contents,
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.1,
-          maxOutputTokens: 4096,
+  let response: Response | null = null;
+  let lastProviderError = "";
+  for (const model of models) {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": getGeminiApiKey(),
         },
-      }),
-      signal: AbortSignal.timeout(20000),
-    }
-  );
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents,
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+            maxOutputTokens: 2048,
+          },
+        }),
+        signal: AbortSignal.timeout(12000),
+      }
+    );
 
-  if (!response.ok) {
-    console.error("Gemini API returned an error:", response.status);
-    throw new Error("Usługa AI chwilowo nie odpowiedziała. Spróbuj ponownie za chwilę.");
+    if (response.ok) break;
+    const errorBody = await response.text();
+    lastProviderError = errorBody.slice(0, 300);
+    console.error("Gemini API returned an error:", {
+      model,
+      status: response.status,
+      body: lastProviderError,
+    });
+    if (![404, 429, 500, 502, 503, 504].includes(response.status)) break;
+  }
+
+  if (!response?.ok) {
+    if (response?.status === 429) {
+      throw new Error("Asystent AI chwilowo osiągnął limit zapytań. Spróbuj ponownie za chwilę.");
+    }
+    if (response?.status === 401 || response?.status === 403) {
+      throw new Error("Klucz GEMINI_API_KEY jest nieprawidłowy albo nie ma dostępu do Gemini API.");
+    }
+    throw new Error("Usługa AI chwilowo nie odpowiada. Sprawdź GEMINI_API_KEY i GEMINI_MODEL w konfiguracji serwera.");
   }
 
   const responseBody: unknown = await response.json();
@@ -626,13 +669,131 @@ async function searchPlayers(profile: AssistantProfile, data: Record<string, unk
   return { reply: `Znalazłem kilka osób pasujących do „${requestedName}”. Wybierz właściwego zawodnika:`, players: result };
 }
 
+async function searchTeam(profile: AssistantProfile, data: Record<string, unknown>) {
+  const requestedName = getString(data.teamName);
+  if (!requestedName) return { reply: "Podaj nazwę drużyny, której kadrę mam wyświetlić." };
+
+  const team = await findTeam(profile, requestedName);
+  if (!team) return { reply: `Nie znalazłem dostępnej drużyny „${requestedName}”.` };
+
+  const { data: teamData, error: teamError } = await supabaseAdmin
+    .from("teams")
+    .select("id, name, age_group")
+    .eq("id", team.id)
+    .eq("club_id", profile.clubId)
+    .maybeSingle();
+  if (teamError) throw teamError;
+  if (!teamData) return { reply: "Ta drużyna nie jest już dostępna." };
+
+  const { data: rows, error } = await supabaseAdmin
+    .from("players")
+    .select("id, first_name, last_name, birth_year, jersey_number")
+    .eq("club_id", profile.clubId)
+    .eq("current_team_id", team.id)
+    .eq("is_active", true)
+    .order("last_name")
+    .order("first_name")
+    .limit(500);
+  if (error) throw error;
+
+  const players: AssistantPlayerResult[] = (rows || []).map((player) => ({
+    id: player.id,
+    firstName: player.first_name,
+    lastName: player.last_name,
+    birthYear: player.birth_year,
+    jerseyNumber: player.jersey_number,
+    teamName: teamData.name,
+    href: profile.role === "coach" ? `/trener/zawodnicy/${player.id}` : "/admin/zawodnicy",
+  }));
+
+  return {
+    reply: players.length
+      ? `Drużyna ${teamData.name} ma ${players.length} aktywnych zawodników.`
+      : `Drużyna ${teamData.name} nie ma obecnie aktywnych zawodników.`,
+    teams: [{
+      id: teamData.id,
+      name: teamData.name,
+      ageGroup: teamData.age_group,
+      playerCount: players.length,
+      players,
+      href: profile.role === "coach" ? null : "/admin/druzyny",
+    }],
+  };
+}
+
+async function searchTeams(profile: AssistantProfile) {
+  const teamIds = await getAuthorizedTeamIds(profile);
+  if (teamIds.length === 0) {
+    return { reply: "Nie znalazłem aktywnych drużyn dostępnych dla Twojego konta.", teams: [] };
+  }
+
+  const [{ data: teams, error: teamsError }, { data: players, error: playersError }] = await Promise.all([
+    supabaseAdmin
+      .from("teams")
+      .select("id, name, age_group")
+      .eq("club_id", profile.clubId)
+      .eq("is_active", true)
+      .in("id", teamIds)
+      .order("name")
+      .limit(500),
+    supabaseAdmin
+      .from("players")
+      .select("id, first_name, last_name, birth_year, jersey_number, current_team_id")
+      .eq("club_id", profile.clubId)
+      .eq("is_active", true)
+      .in("current_team_id", teamIds)
+      .order("last_name")
+      .order("first_name")
+      .limit(5000),
+  ]);
+  if (teamsError) throw teamsError;
+  if (playersError) throw playersError;
+
+  const playersByTeam = new Map<string, AssistantPlayerResult[]>();
+  for (const player of players || []) {
+    const team = (teams || []).find((item) => item.id === player.current_team_id);
+    if (!team) continue;
+    const teamPlayers = playersByTeam.get(team.id) || [];
+    teamPlayers.push({
+      id: player.id,
+      firstName: player.first_name,
+      lastName: player.last_name,
+      birthYear: player.birth_year,
+      jerseyNumber: player.jersey_number,
+      teamName: team.name,
+      href: profile.role === "coach" ? `/trener/zawodnicy/${player.id}` : "/admin/zawodnicy",
+    });
+    playersByTeam.set(team.id, teamPlayers);
+  }
+
+  const results: AssistantTeamResult[] = (teams || []).map((team) => {
+    const teamPlayers = playersByTeam.get(team.id) || [];
+    return {
+      id: team.id,
+      name: team.name,
+      ageGroup: team.age_group,
+      playerCount: teamPlayers.length,
+      players: teamPlayers,
+      href: profile.role === "coach" ? null : "/admin/druzyny",
+    };
+  });
+
+  return {
+    reply: `Masz dostęp do ${results.length} ${results.length === 1 ? "drużyny" : "drużyn"}.`,
+    teams: results,
+  };
+}
+
 function resolvePlanFromMessage(plan: AssistantPlan, message: string): AssistantPlan {
   const data = { ...plan.data };
   const dates = extractDatesFromMessage(message);
   const isTrainingRequest = /\b(trening\w*|jednostk\w*)\b/i.test(message);
   const isCreationRequest = /\b(zaplanuj|dodaj|utw[oó]rz|stw[oó]rz|zorganizuj)\b/i.test(message);
+  const isTeamRosterRequest = /\b(cał\w* drużyn\w*|kadr\w*|skład\w*|wszys\w* zawodnik\w*|lista zawodnik\w*)\b/i.test(message);
+  const isAllTeamsRequest = /\b(moj\w* drużyn\w*|wszystk\w* drużyn\w*|drużyn\w* (które|ktore) (obsługuj\w*|obsluguj\w*|prowadz\w*)|jak\w* drużyn\w*|drużyn\w* mam)\b/i.test(message);
   const hasPlayerLookup = /\b(poka[zż]|znajd[zź]|wyszukaj|wy[sś]wietl)\b/i.test(message) &&
-    /\b(zawodnik\w*|zawodniczk\w*|gracz\w*|piłkarz\w*|kartotek\w*|profil\w*)\b/i.test(message);
+    /\b(zawodnik\w*|zawodniczk\w*|gracz\w*|piłkarz\w*|kartotek\w*|profil\w*)\b/i.test(message) &&
+    !isTeamRosterRequest;
 
   if (plan.action === "search_trainings" ||
       (isTrainingRequest && dates.length > 0 && !isCreationRequest)) {
@@ -653,6 +814,17 @@ function resolvePlanFromMessage(plan: AssistantPlan, message: string): Assistant
     const playerName = getString(data.playerName) || derivePlayerName(message);
     if (playerName) data.playerName = playerName;
     return { ...plan, action: "search_players", data };
+  }
+
+  if (plan.action === "search_teams" || isAllTeamsRequest) {
+    return { ...plan, action: "search_teams", data };
+  }
+
+  if (plan.action === "search_team" || isTeamRosterRequest) {
+    if (!getString(data.teamName)) {
+      data.teamName = deriveTeamName(message);
+    }
+    return { ...plan, action: "search_team", data };
   }
 
   return plan;
@@ -791,12 +963,30 @@ export async function runAssistantAction(
     }
 
     const history = validateHistory(rawHistory);
-    const plan = resolvePlanFromMessage(await requestAssistantPlan(message, history), message);
+    let plan: AssistantPlan;
+    try {
+      plan = resolvePlanFromMessage(await requestAssistantPlan(message, history), message);
+    } catch (error: unknown) {
+      const rosterRequest = /\b(cał\w* drużyn\w*|kadr\w*|skład\w*|wszys\w* zawodnik\w*|lista zawodnik\w*)\b/i.test(message);
+      const allTeamsRequest = /\b(moj\w* drużyn\w*|wszystk\w* drużyn\w*|drużyn\w* (które|ktore) (obsługuj\w*|obsluguj\w*|prowadz\w*)|jak\w* drużyn\w*|drużyn\w* mam)\b/i.test(message);
+      if (allTeamsRequest) {
+        return { success: true, data: await searchTeams(profile) };
+      }
+      const teamName = deriveTeamName(message);
+      if (rosterRequest && teamName) {
+        return { success: true, data: await searchTeam(profile, { teamName }) };
+      }
+      throw error;
+    }
     switch (plan.action) {
       case "search_trainings":
         return { success: true, data: await searchTrainings(profile, plan.data) };
       case "search_players":
         return { success: true, data: await searchPlayers(profile, plan.data) };
+      case "search_team":
+        return { success: true, data: await searchTeam(profile, plan.data) };
+      case "search_teams":
+        return { success: true, data: await searchTeams(profile) };
       case "generate_csv": {
         if (profile.role === "coach") {
           return { success: true, data: { reply: "Generowanie list zawodników jest dostępne w panelu administratora." } };

@@ -6,12 +6,14 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRight, Lock, Mail, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CornerFlag, PitchArt, PitchMark } from "@/components/landing/mark";
-import { loginAction } from "@/app/actions/auth";
+import { loginAction, requestPasswordResetAction } from "@/app/actions/auth";
 
 export default function LoginPage() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [showReset, setShowReset] = useState(false);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -30,6 +32,21 @@ export default function LoginPage() {
       // Przekierowanie zależy od roli przypisanej do profilu użytkownika.
       router.push(result.redirectTo || "/trener");
       router.refresh();
+    });
+  }
+
+  function handleReset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setErrorMsg(null);
+    setResetMessage(null);
+    const formData = new FormData(event.currentTarget);
+    startTransition(async () => {
+      const result = await requestPasswordResetAction(formData);
+      if (!result.success) {
+        setErrorMsg(result.error || "Nie udało się wysłać wiadomości.");
+        return;
+      }
+      setResetMessage("Jeśli konto istnieje, wysłaliśmy instrukcję resetu hasła.");
     });
   }
 
@@ -117,6 +134,7 @@ export default function LoginPage() {
                   />
                   <Mail className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
                 </div>
+
               </div>
 
               <div>
@@ -153,6 +171,25 @@ export default function LoginPage() {
                 <ArrowRight className="ml-2 size-4 transition-transform group-hover/btn:translate-x-1" />
               </Button>
             </form>
+
+            <button
+              type="button"
+              onClick={() => setShowReset((value) => !value)}
+              className="mt-3 h-11 w-full rounded-md border-2 border-primary/40 bg-primary/10 px-4 text-sm font-semibold tracking-wide text-primary uppercase transition-colors hover:border-primary hover:bg-primary/20"
+            >
+              {showReset ? "Zamknij resetowanie hasła" : "Nie pamiętam hasła"}
+            </button>
+
+            {showReset && (
+              <form onSubmit={handleReset} className="mt-4 space-y-2 rounded-lg border border-foreground/15 bg-background p-3">
+                <p className="text-xs text-muted-foreground">Podaj e-mail, aby otrzymać link do ustawienia nowego hasła.</p>
+                <input name="email" type="email" required placeholder="trener@klub.pl" className="h-10 w-full rounded-md border-2 border-foreground/20 bg-card px-3 text-sm" />
+                <Button type="submit" disabled={isPending} size="sm" className="w-full">
+                  Wyślij link resetujący
+                </Button>
+                {resetMessage && <p className="text-xs text-primary">{resetMessage}</p>}
+              </form>
+            )}
 
             <div className="mt-7 border-t-2 border-foreground/10 pt-4">
               <p className="text-center text-xs leading-5 text-muted-foreground">

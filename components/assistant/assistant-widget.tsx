@@ -18,6 +18,7 @@ import {
   runAssistantAction,
   type AssistantHistoryMessage,
   type AssistantPlayerResult,
+  type AssistantTeamResult,
   type AssistantPendingAction,
   type AssistantReply,
   type AssistantTrainingResult,
@@ -28,6 +29,7 @@ interface ChatMessage extends AssistantHistoryMessage {
   id: string;
   trainings?: AssistantReply["trainings"];
   players?: AssistantReply["players"];
+  teams?: AssistantTeamResult[];
   csvRecords?: CsvPlayerRecord[];
   proposal?: AssistantPendingAction;
 }
@@ -91,6 +93,17 @@ function isAssistantPlayerResult(value: unknown): value is AssistantPlayerResult
     (value.href === null || typeof value.href === "string");
 }
 
+function isAssistantTeamResult(value: unknown): value is AssistantTeamResult {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    (value.ageGroup === null || typeof value.ageGroup === "string") &&
+    typeof value.playerCount === "number" &&
+    Array.isArray(value.players) &&
+    value.players.every(isAssistantPlayerResult) &&
+    (value.href === null || typeof value.href === "string");
+}
+
 function isPendingAction(value: unknown): value is AssistantPendingAction {
   if (!isRecord(value)) return false;
   if (value.kind === "create_players") {
@@ -129,6 +142,9 @@ function restoreAssistantMessages(value: unknown): ChatMessage[] {
       }
       if (Array.isArray(item.players) && item.players.every(isAssistantPlayerResult)) {
         message.players = item.players;
+      }
+      if (Array.isArray(item.teams) && item.teams.every(isAssistantTeamResult)) {
+        message.teams = item.teams;
       }
       if (Array.isArray(item.csvRecords) && item.csvRecords.every(isCsvPlayerRecord)) {
         message.csvRecords = item.csvRecords;
@@ -325,6 +341,7 @@ export function AssistantWidget({ userId }: { userId: string }) {
           content: data.reply,
           trainings: data.trainings,
           players: data.players,
+          teams: data.teams,
           csvRecords: data.csvRecords,
           proposal: data.proposal,
         }],
@@ -505,6 +522,39 @@ export function AssistantWidget({ userId }: { userId: string }) {
                         <a href={player.href || "#"} className="mt-1 inline-block font-semibold text-primary underline">
                           Otwórz kartę zawodnika
                         </a>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {message.teams && message.teams.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {message.teams.map((team) => (
+                      <div key={team.id} className="rounded-lg border border-border bg-background p-2 text-foreground">
+                        <p className="font-bold">
+                          {team.name}{team.ageGroup ? ` · ${team.ageGroup}` : ""}
+                        </p>
+                        <p className="mb-2 text-muted-foreground">
+                          {team.playerCount} {team.playerCount === 1 ? "zawodnik" : "zawodników"}
+                        </p>
+                        <div className="max-h-64 space-y-1 overflow-auto">
+                          {team.players.map((player) => (
+                            <div key={player.id} className="flex items-center justify-between border-t border-border py-1.5 text-xs">
+                              <span className="font-semibold">
+                                {player.firstName} {player.lastName}
+                                {player.jerseyNumber != null ? ` · #${player.jerseyNumber}` : ""}
+                              </span>
+                              <span className="text-muted-foreground">
+                                {player.birthYear ? `Rocznik ${player.birthYear}` : ""}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        {team.href && (
+                          <a href={team.href} className="mt-2 inline-block font-semibold text-primary underline">
+                            Otwórz drużyny
+                          </a>
+                        )}
                       </div>
                     ))}
                   </div>

@@ -27,7 +27,9 @@ export default async function AdminTeamsPage() {
         })),
       }))
     : [];
-  const coaches = coachesRes.success && coachesRes.coaches ? coachesRes.coaches : [];
+  const coaches = coachesRes.success && coachesRes.coaches
+    ? coachesRes.coaches.filter((coach) => coach.role === "coach")
+    : [];
 
   return (
     <TeamsManager 

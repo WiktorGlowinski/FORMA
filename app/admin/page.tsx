@@ -53,7 +53,7 @@ export default async function AdminDashboardPage() {
             className="inline-flex h-11 items-center gap-2 rounded-xl border-2 border-foreground/20 bg-background px-4 text-xs font-heading uppercase tracking-wider font-bold transition hover:bg-muted active:scale-95 shadow-[2px_2px_0_0_var(--foreground)]"
           >
             <UserCheck className="size-4 text-primary" />
-            <span>Sztab Trenerski</span>
+            <span>Sztab</span>
           </Link>
 
           <Link
@@ -118,7 +118,7 @@ export default async function AdminDashboardPage() {
           </div>
           <div className="mt-3 flex items-baseline gap-1.5">
             <span className="font-heading text-4xl font-semibold tracking-tight">{metrics.totalCoaches}</span>
-            <span className="font-mono text-xs text-muted-foreground">trenerów</span>
+            <span className="font-mono text-xs text-muted-foreground">osób w sztabie</span>
           </div>
           <p className="mt-1 font-mono text-[11px] text-muted-foreground">Konta z licencją</p>
         </div>
@@ -163,7 +163,7 @@ export default async function AdminDashboardPage() {
           </div>
         </Link>
 
-        {/* 2. Sztab Trenerski */}
+        {/* 2. Sztab */}
         <Link
           href="/admin/sztab"
           className="group rounded-2xl border-2 border-foreground/20 bg-card p-6 shadow-sm hover:border-foreground hover:shadow-[4px_4px_0_0_var(--foreground)] transition-all flex flex-col justify-between"
@@ -176,7 +176,7 @@ export default async function AdminDashboardPage() {
               <Award className="size-5 text-muted-foreground group-hover:text-primary transition-colors" />
             </div>
             <h2 className="mt-2 font-heading text-2xl uppercase tracking-tight">
-              Sztab Trenerski
+              Sztab
             </h2>
             <p className="mt-1.5 font-mono text-xs text-muted-foreground leading-relaxed">
               Rejestracja nowych szkoleniowców, edycja danych kontaktowych, reset haseł, awatary oraz podgląd przypisań do zespołów.

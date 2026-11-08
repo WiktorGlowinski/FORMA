@@ -38,6 +38,7 @@ export interface CoachCardItem {
   phone?: string | null;
   avatarUrl?: string | null;
   isActive: boolean;
+  role: "coach" | "coordinator";
   assignedTeams: AssignedTeamInfo[];
 }
 
@@ -62,6 +63,7 @@ export function CoachesManager({
   const [createEmail, setCreateEmail] = useState("");
   const [createPhone, setCreatePhone] = useState("");
   const [createPassword, setCreatePassword] = useState("");
+  const [createRole, setCreateRole] = useState<"coach" | "coordinator">("coach");
   const [createAvatar, setCreateAvatar] = useState("");
   const [isUploadingCreateAvatar, setIsUploadingCreateAvatar] = useState(false);
   const createFileRef = useRef<HTMLInputElement>(null);
@@ -70,7 +72,6 @@ export function CoachesManager({
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editPhone, setEditPhone] = useState("");
-  const [editPassword, setEditPassword] = useState("");
   const [editAvatar, setEditAvatar] = useState("");
   const [editIsActive, setEditIsActive] = useState(true);
   const [isUploadingEditAvatar, setIsUploadingEditAvatar] = useState(false);
@@ -92,7 +93,6 @@ export function CoachesManager({
     setEditEmail(coach.email);
     setEditPhone(coach.phone || "");
     setEditAvatar(coach.avatarUrl || "");
-    setEditPassword("");
     setEditIsActive(coach.isActive);
     setErrorMsg(null);
   }
@@ -148,6 +148,7 @@ export function CoachesManager({
       email: createEmail,
       password: createPassword,
       phone: createPhone || undefined,
+      role: createRole,
       avatarUrl: createAvatar || undefined,
     });
 
@@ -160,6 +161,7 @@ export function CoachesManager({
           phone: res.coach.phone || null,
           avatarUrl: res.coach.avatar_url || null,
           isActive: true,
+          role: res.coach.role,
           assignedTeams: [],
         },
         ...prev,
@@ -169,6 +171,7 @@ export function CoachesManager({
       setCreateEmail("");
       setCreatePhone("");
       setCreatePassword("");
+      setCreateRole("coach");
       setCreateAvatar("");
       setIsCreateOpen(false);
     } else {
@@ -191,7 +194,6 @@ export function CoachesManager({
       email: editEmail,
       phone: editPhone || undefined,
       avatarUrl: editAvatar || undefined,
-      newPassword: editPassword.trim() || undefined,
       isActive: editIsActive,
     });
 
@@ -242,7 +244,7 @@ export function CoachesManager({
             Kadra Szkoleniowa Klubu
           </p>
           <h1 className="mt-1 font-heading text-4xl uppercase tracking-tight sm:text-5xl">
-            Sztab Trenerski
+            Sztab
           </h1>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
             Baza zarejestrowanych szkoleniowców, zdjęcia profilowe, edycja danych i uprawnienia.
@@ -258,7 +260,7 @@ export function CoachesManager({
           className="inline-flex h-11 items-center gap-2 rounded-xl border-2 border-foreground bg-primary px-4 text-xs font-heading uppercase tracking-wider font-black text-primary-foreground transition active:scale-95 shadow-[3px_3px_0_0_var(--foreground)] shrink-0"
         >
           <UserPlus className="size-4 stroke-[3]" />
-          <span>Dodaj trenera</span>
+          <span>Dodaj członka sztabu</span>
         </button>
       </div>
 
@@ -316,7 +318,7 @@ export function CoachesManager({
                       </h3>
                       <div className="flex items-center gap-1.5 mt-0.5">
                         <span className="inline-block rounded bg-primary/10 border border-primary/25 px-2 py-0.5 font-mono text-[9px] font-bold text-primary uppercase">
-                          Licencja
+                          {coach.role === "coordinator" ? "Analityk" : "Trener"}
                         </span>
                         {!coach.isActive && (
                           <span className="inline-block rounded bg-destructive/15 border border-destructive/30 px-1.5 py-0.5 font-mono text-[9px] font-bold text-destructive uppercase">
@@ -349,12 +351,18 @@ export function CoachesManager({
                   )}
                 </div>
 
-                {/* Prowadzone drużyny */}
+                {/* Zakres pracy */}
                 <div className="border-t border-border/80 pt-3">
                   <span className="font-mono text-[10px] uppercase font-bold text-muted-foreground block mb-2">
-                    Prowadzone drużyny ({coach.assignedTeams.length}):
+                    {coach.role === "coordinator"
+                      ? "Zakres dostępu:"
+                      : `Prowadzone drużyny (${coach.assignedTeams.length}):`}
                   </span>
-                  {coach.assignedTeams.length === 0 ? (
+                  {coach.role === "coordinator" ? (
+                    <span className="font-mono text-[11px] font-semibold text-primary">
+                      Cały klub
+                    </span>
+                  ) : coach.assignedTeams.length === 0 ? (
                     <span className="font-mono text-[11px] text-muted-foreground italic">
                       Nieprzypisany do żadnego zespołu
                     </span>
@@ -409,7 +417,7 @@ export function CoachesManager({
                   Kadra Klubu
                 </span>
                 <h3 className="font-heading text-2xl uppercase tracking-tight">
-                  Nowy Trener
+                  Nowy członek sztabu
                 </h3>
               </div>
               <button
@@ -479,6 +487,20 @@ export function CoachesManager({
                     Zdjęcie profilowe trenera (PNG, JPG, WEBP).
                   </p>
                 </div>
+              </div>
+
+              <div>
+                <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1">
+                  Rola w sztabie
+                </label>
+                <select
+                  value={createRole}
+                  onChange={(e) => setCreateRole(e.target.value as "coach" | "coordinator")}
+                  className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm outline-none focus:border-foreground"
+                >
+                  <option value="coach">Trener</option>
+                  <option value="coordinator">Analityk</option>
+                </select>
               </div>
 
               <div>
@@ -563,7 +585,7 @@ export function CoachesManager({
                   disabled={isSubmitting || isUploadingCreateAvatar}
                   className="h-11 w-1/2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50"
                 >
-                  {isSubmitting ? "Tworzenie..." : "Zarejestruj trenera"}
+                  {isSubmitting ? "Tworzenie..." : "Zarejestruj członka sztabu"}
                 </button>
               </div>
             </form>
@@ -699,22 +721,6 @@ export function CoachesManager({
                       className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background pl-9 pr-2.5 font-mono text-xs outline-none focus:border-foreground"
                     />
                   </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1">
-                  Nowe hasło (Zostaw puste, by nie zmieniać)
-                </label>
-                <div className="relative flex items-center">
-                  <Lock className="absolute left-3.5 size-4 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Wpisz nowe hasło..."
-                    value={editPassword}
-                    onChange={(e) => setEditPassword(e.target.value)}
-                    className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background pl-10 pr-3 font-mono text-sm outline-none focus:border-foreground"
-                  />
                 </div>
               </div>
 

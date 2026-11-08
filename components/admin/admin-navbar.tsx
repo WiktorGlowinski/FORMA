@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 interface AdminNavbarProps {
   clubName: string;
+  isMasterAdmin?: boolean;
 }
 
 const NAV_LINKS = [
@@ -31,7 +32,7 @@ const NAV_LINKS = [
   { href: "/admin/boiska", label: "Boiska", icon: MapPin },
 ];
 
-export function AdminNavbar({ clubName }: AdminNavbarProps) {
+export function AdminNavbar({ clubName, isMasterAdmin = false }: AdminNavbarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
 
@@ -83,6 +84,15 @@ export function AdminNavbar({ clubName }: AdminNavbarProps) {
           })}
 
           <span className="h-4 w-px bg-foreground/20" />
+
+          {isMasterAdmin && (
+            <Link
+              href="/master-admin"
+              className="rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] font-bold text-primary transition-colors hover:bg-primary/20"
+            >
+              Master Admin
+            </Link>
+          )}
 
           {/* Wylogowanie Desktop */}
           <form action={signOutAction}>
@@ -150,6 +160,15 @@ export function AdminNavbar({ clubName }: AdminNavbarProps) {
           </div>
 
           <div className="border-t border-border/80 pt-2">
+            {isMasterAdmin && (
+              <Link
+                href="/master-admin"
+                onClick={() => setIsOpen(false)}
+                className="mb-2 flex items-center justify-center rounded-xl border border-primary/30 bg-primary/10 px-4 py-2.5 font-heading text-xs font-bold uppercase tracking-wider text-primary"
+              >
+                Panel Master Admin
+              </Link>
+            )}
             <form action={signOutAction}>
               <button
                 type="submit"
