@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase-server";
 import { PitchArt } from "@/components/landing/mark";
 import { AdminNavbar } from "@/components/admin/admin-navbar";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
+import { BugReportWidget } from "@/components/bug-reports/bug-report-widget";
 
 export default async function AdminLayout({
   children,
@@ -49,6 +50,7 @@ export default async function AdminLayout({
         {children}
       </main>
       <AssistantWidget key={user.id} userId={user.id} />
+      <BugReportWidget />
     </div>
   );
 }

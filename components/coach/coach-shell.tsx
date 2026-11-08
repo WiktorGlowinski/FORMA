@@ -9,6 +9,7 @@ import { signOutAction } from "@/app/actions/auth";
 import { useCoachStore } from "@/store/useCoachStore";
 import { cn } from "@/lib/utils";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
+import { BugReportWidget } from "@/components/bug-reports/bug-report-widget";
 
 function CoachNav() {
   const pathname = usePathname();
@@ -115,6 +116,7 @@ export function CoachShell({ children, userId }: { children: React.ReactNode; us
         {children}
       </main>
       <AssistantWidget key={userId} userId={userId} />
+      <BugReportWidget />
     </div>
   );
 }

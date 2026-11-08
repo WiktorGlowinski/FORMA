@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase-server";
 import { MasterAdminNavbar } from "@/components/master-admin/master-admin-navbar";
+import { BugReportWidget } from "@/components/bug-reports/bug-report-widget";
 
 export default async function MasterAdminLayout({ children }: { children: React.ReactNode }) {
   await connection();
@@ -18,6 +19,7 @@ export default async function MasterAdminLayout({ children }: { children: React.
     <div className="min-h-screen bg-background text-foreground">
       <MasterAdminNavbar name={profile.full_name || "Master Admin"} />
       <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
+      <BugReportWidget />
     </div>
   );
 }

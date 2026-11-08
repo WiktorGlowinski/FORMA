@@ -3,6 +3,7 @@ import { connection } from 'next/server'
 import { redirect } from 'next/navigation'
 import { signOutAction } from '@/app/actions/auth'
 import { createClient } from '@/lib/supabase-server'
+import { BugReportWidget } from '@/components/bug-reports/bug-report-widget'
 
 export const instant = false
 
@@ -46,6 +47,7 @@ export default async function CoordinatorLayout({
                 </div>
             </header>
             <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
+            <BugReportWidget />
         </div>
     )
 }
