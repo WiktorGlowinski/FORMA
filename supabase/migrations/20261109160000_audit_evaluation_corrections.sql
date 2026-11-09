@@ -7,16 +7,13 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  record_data jsonb;
   record_club_id uuid;
   record_id uuid;
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    record_data := to_jsonb(OLD);
     record_club_id := OLD.club_id;
     record_id := OLD.id;
   ELSE
-    record_data := to_jsonb(NEW);
     record_club_id := NEW.club_id;
     record_id := NEW.id;
   END IF;
@@ -36,7 +33,7 @@ BEGIN
     auth.uid(),
     TG_TABLE_NAME,
     record_id,
-    lower(TG_OP),
+    TG_OP,
     CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN to_jsonb(OLD) ELSE NULL END,
     CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN to_jsonb(NEW) ELSE NULL END,
     now()

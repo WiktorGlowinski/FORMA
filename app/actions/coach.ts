@@ -70,7 +70,13 @@ function getInjuryKindFromComment(comment: string | null | undefined): InjuryKin
   const firstLine = comment?.split(/\r?\n/, 1)[0] || "";
   if (!firstLine.startsWith("Uraz: ")) return null;
   const value = firstLine.slice("Uraz: ".length);
-  return INJURY_KINDS.find((kind) => kind.id === value)?.id ?? null;
+  return (
+    INJURY_KINDS.find(
+      (kind) =>
+        kind.id === value ||
+        kind.label.localeCompare(value, "pl", { sensitivity: "base" }) === 0
+    )?.id ?? null
+  );
 }
 
 function getEvaluationNote(comment: string | null | undefined): string {
@@ -83,7 +89,8 @@ function getEvaluationNote(comment: string | null | undefined): string {
 function createEvaluationComment(mark: Mark, note: string): string | null {
   const parts: string[] = [];
   if (mark.type === "absence" && mark.reason === "injury" && mark.injury) {
-    parts.push(`Uraz: ${mark.injury}`);
+    const injury = INJURY_KINDS.find((kind) => kind.id === mark.injury);
+    parts.push(`Uraz: ${injury?.label || mark.injury}`);
   }
   if (note.trim()) parts.push(`Notatka: ${note.trim()}`);
   return parts.length > 0 ? parts.join("\n") : null;
