@@ -96,11 +96,13 @@ export async function updateMasterBugReportAction(reportId: string, status: stri
       const { user } = await getReporter();
       const { data: profile } = await supabaseAdmin.from("profiles").select("role").eq("id", user.id).maybeSingle();
       if (profile?.role !== "master_admin") throw new Error("Brak uprawnień.");
-      if (!["open", "in_progress", "resolved", "closed"].includes(status)) throw new Error("Nieprawidłowy status.");
+      if (!["new", "in_progress", "resolved", "rejected"].includes(status)) {
+        throw new Error("Nieprawidłowy status.");
+      }
       const { error } = await supabaseAdmin.from("bug_reports").update({
         status,
         admin_note: adminNote.trim().slice(0, 2000) || null,
-        resolved_at: status === "resolved" || status === "closed" ? new Date().toISOString() : null,
+        resolved_at: status === "resolved" ? new Date().toISOString() : null,
       }).eq("id", reportId);
       if (error) throw error;
       revalidatePath("/master-admin");
