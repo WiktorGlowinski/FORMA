@@ -311,6 +311,12 @@ Anonymous table privileges are revoked. Public survey access is performed only t
 |--------|---------|-------|--------|-------|------------|
 | `Dostęp do audytu` | SELECT | public | PERMISSIVE | `((get_auth_role() = 'master_admin'::user_role) OR ((club_id = get_auth_club_id()) AND (get_auth_role() = ANY (ARRAY['club_admin'::user_role, 'coordinator'::user_role]))))` | — |
 
+Migracja
+[`supabase/migrations/20261109160000_audit_evaluation_corrections.sql`](../supabase/migrations/20261109160000_audit_evaluation_corrections.sql)
+rejestruje automatycznie każdy INSERT, UPDATE i DELETE w tabelach `evaluations` oraz `trainings`,
+zapisując pełny stan `old_data` i `new_data`. Dzięki temu korekta oceny i zmiana statusu treningu
+pozostawiają historię niezależnie od ścieżki aplikacji, która wykonała zapis.
+
 ### `teams`
 
 | Policy | Command | Roles | Action | USING | WITH CHECK |

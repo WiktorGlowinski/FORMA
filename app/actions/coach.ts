@@ -488,7 +488,6 @@ export async function createTrainingAction(payload: {
   mainGoal?: string;
   trainingType?: string;
   organizationalNote?: string;
-  status: "completed" | "scheduled";
 }) {
   try {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.date)) {
@@ -560,7 +559,8 @@ export async function createTrainingAction(payload: {
         main_goal: payload.mainGoal || null,
         training_type: payload.trainingType || null,
         organizational_note: payload.organizationalNote || null,
-        status: payload.status,
+        status: "scheduled",
+        evaluation_status: "unrated",
         survey_enabled: false,
       })
       .select("id")
@@ -878,6 +878,9 @@ export async function savePlayerMarkAction(
       .single();
 
     if (!tr) return { success: false, error: "Nie znaleziono jednostki." };
+    if (tr.status === "cancelled") {
+      return { success: false, error: "Nie można oceniać odwołanego treningu." };
+    }
 
     if (!(await canManageTrainingEvaluations(user.id, tr))) {
       return { success: false, error: "Nie możesz modyfikować ocen w jednostce innego trenera." };
@@ -938,16 +941,48 @@ export async function savePlayerMarkAction(
 
     if (error) throw error;
 
-    if (tr.status === "scheduled" || tr.status === "planned") {
-      const { error: statusError } = await supabaseAdmin
-        .from("trainings")
-        .update({
-          status: "completed",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", trainingId);
-      if (statusError) throw statusError;
+    const [{ data: rosterPlayers, error: rosterError }, { data: trainingEvaluations, error: evaluationsError }] =
+      await Promise.all([
+        supabaseAdmin
+          .from("players")
+          .select("id")
+          .eq("club_id", tr.club_id)
+          .eq("current_team_id", tr.team_id)
+          .eq("is_active", true),
+        supabaseAdmin
+          .from("evaluations")
+          .select("player_id")
+          .eq("training_id", trainingId)
+          .eq("club_id", tr.club_id),
+      ]);
+
+    if (rosterError) throw rosterError;
+    if (evaluationsError) throw evaluationsError;
+
+    const expectedPlayerIds = new Set((rosterPlayers || []).map((player) => player.id));
+    for (const evaluation of trainingEvaluations || []) {
+      if (evaluation.player_id !== playerId) {
+        expectedPlayerIds.add(evaluation.player_id);
+      }
     }
+
+    const evaluatedPlayerIds = new Set((trainingEvaluations || []).map((evaluation) => evaluation.player_id));
+    const isFullyEvaluated =
+      expectedPlayerIds.size > 0 &&
+      [...expectedPlayerIds].every((expectedId) => evaluatedPlayerIds.has(expectedId));
+    const nextStatus = isFullyEvaluated ? "completed" : "scheduled";
+    const nextEvaluationStatus = isFullyEvaluated ? "completed" : "partial";
+
+    const { error: statusError } = await supabaseAdmin
+      .from("trainings")
+      .update({
+        status: nextStatus,
+        evaluation_status: nextEvaluationStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", trainingId)
+      .neq("status", "cancelled");
+    if (statusError) throw statusError;
 
     return { success: true };
   } catch (err: unknown) {
@@ -967,7 +1002,7 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
 
     const { data: tr, error: trainingError } = await supabase
       .from("trainings")
-      .select("club_id, team_id, lead_coach_id")
+      .select("club_id, team_id, lead_coach_id, status")
       .eq("id", trainingId)
       .single();
 
@@ -977,6 +1012,9 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
     if (!(await canManageTrainingEvaluations(user.id, tr))) {
       return { success: false, error: "Brak uprawnień do resetowania ocen w tym treningu." };
     }
+    if (tr.status === "cancelled") {
+      return { success: false, error: "Nie można resetować ocen odwołanego treningu." };
+    }
 
     const { error } = await supabase
       .from("evaluations")
@@ -984,6 +1022,17 @@ export async function resetTrainingEvaluationsAction(trainingId: string) {
       .eq("training_id", trainingId);
 
     if (error) throw error;
+
+    const { error: statusError } = await supabase
+      .from("trainings")
+      .update({
+        status: "scheduled",
+        evaluation_status: "unrated",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", trainingId)
+      .neq("status", "cancelled");
+    if (statusError) throw statusError;
 
     revalidatePath(`/trener/${trainingId}`);
     revalidatePath("/trener");
@@ -1087,7 +1136,6 @@ export async function enableTrainingSurveyAction(trainingId: string) {
       .from("trainings")
       .update({
         survey_enabled: true,
-        status: "completed",
         updated_at: new Date().toISOString(),
       })
       .eq("id", trainingId);

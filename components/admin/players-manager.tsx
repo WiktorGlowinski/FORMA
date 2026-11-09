@@ -14,7 +14,8 @@ import {
   Loader2,
   Trash2,
   User,
-  ArrowRightLeft
+  ArrowRightLeft,
+  ArrowUpDown,
 } from "lucide-react";
 import {
   createPlayerAction,
@@ -49,6 +50,8 @@ interface TeamChoice {
   is_active: boolean;
 }
 
+type PlayerSort = "name-asc" | "name-desc" | "jersey-asc" | "jersey-desc" | "birth-desc" | "birth-asc";
+
 const MONTHS = [
   { value: "01", label: "Styczeń (01)" },
   { value: "02", label: "Luty (02)" },
@@ -75,6 +78,7 @@ export function PlayersManager({
   const [players, setPlayers] = useState<PlayerItem[]>(initialPlayers);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTeamFilter, setSelectedTeamFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<PlayerSort>("name-asc");
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
@@ -122,6 +126,24 @@ export function PlayersManager({
     const matchesSearch = fullSearch.includes(searchQuery.toLowerCase());
 
     return matchesTeam && matchesSearch;
+  }).sort((a, b) => {
+    if (sortBy.startsWith("name")) {
+      const result = `${a.last_name} ${a.first_name}`.localeCompare(
+        `${b.last_name} ${b.first_name}`,
+        "pl"
+      );
+      return sortBy === "name-desc" ? -result : result;
+    }
+
+    if (sortBy.startsWith("jersey")) {
+      const aNumber = a.jersey_number ?? Number.MAX_SAFE_INTEGER;
+      const bNumber = b.jersey_number ?? Number.MAX_SAFE_INTEGER;
+      const result = aNumber - bNumber;
+      return sortBy === "jersey-desc" ? -result : result;
+    }
+
+    const result = a.birth_year - b.birth_year;
+    return sortBy === "birth-desc" ? -result : result;
   });
 
   // Upload zdjęcia w formularzu ręcznego dodawania
@@ -376,8 +398,8 @@ export function PlayersManager({
       </div>
 
       {/* FILTROWANIE */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-2xl border-2 border-foreground/20 bg-card p-4 shadow-sm">
-        <div className="sm:col-span-2 relative flex items-center">
+      <div className="grid grid-cols-1 gap-3 rounded-2xl border-2 border-foreground/20 bg-card p-4 shadow-sm sm:grid-cols-4">
+        <div className="relative flex items-center sm:col-span-2">
           <Search className="absolute left-3.5 size-4 text-muted-foreground" />
           <input
             type="text"
@@ -400,6 +422,23 @@ export function PlayersManager({
                 {t.name}
               </option>
             ))}
+          </select>
+        </div>
+
+        <div className="relative">
+          <ArrowUpDown className="pointer-events-none absolute left-3.5 top-3.5 size-4 text-muted-foreground" />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as PlayerSort)}
+            aria-label="Sortowanie zawodników"
+            className="h-11 w-full rounded-xl border-2 border-foreground/15 bg-background pl-10 pr-3 font-mono text-xs outline-none focus:border-foreground"
+          >
+            <option value="name-asc">Nazwisko: A–Z</option>
+            <option value="name-desc">Nazwisko: Z–A</option>
+            <option value="jersey-asc">Numer: rosnąco</option>
+            <option value="jersey-desc">Numer: malejąco</option>
+            <option value="birth-asc">Rocznik: najstarszy</option>
+            <option value="birth-desc">Rocznik: najmłodszy</option>
           </select>
         </div>
       </div>

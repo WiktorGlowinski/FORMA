@@ -1129,7 +1129,6 @@ export async function confirmAssistantAction(rawProposal: unknown) {
           mainGoal: getString(rawProposal.mainGoal) || undefined,
           trainingType: getString(rawProposal.trainingType) || undefined,
           organizationalNote: getString(rawProposal.organizationalNote) || undefined,
-          status: "scheduled",
         });
         if (!result.success) return { success: false, message: result.error || "Nie udało się utworzyć treningu." };
       } else {

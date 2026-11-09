@@ -411,16 +411,17 @@ export async function logAuditEvent(payload: {
   newData?: unknown;
 }) {
   try {
-    await supabaseAdmin.from("audit_logs").insert({
+    const { error } = await supabaseAdmin.from("audit_logs").insert({
       club_id: payload.clubId,
       user_id: payload.userId || null,
       action: payload.action,
-      entity_type: payload.entityType,
-      entity_id: payload.entityId || null,
+      table_name: payload.entityType,
+      record_id: payload.entityId || null,
       old_data: payload.oldData || null,
       new_data: payload.newData || null,
       created_at: new Date().toISOString(),
     });
+    if (error) throw error;
   } catch (err) {
     console.error("Błąd zapisu do audit_logs:", err);
   }

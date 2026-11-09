@@ -266,7 +266,6 @@ export function TrainingBoard() {
 
   const [fieldId, setFieldId] = useState("");
   const [trainingType, setTrainingType] = useState(TRAINING_TYPES[0].id);
-  const [status, setStatus] = useState<"completed" | "scheduled">("completed");
   const [topic, setTopic] = useState("");
   const [mainGoal, setMainGoal] = useState("");
   const [orgNote, setOrgNote] = useState("");
@@ -562,7 +561,6 @@ export function TrainingBoard() {
       mainGoal: mainGoal.trim() || undefined,
       trainingType,
       organizationalNote: orgNote.trim() || undefined,
-      status,
     });
 
     if (res.success) {
@@ -1480,36 +1478,12 @@ export function TrainingBoard() {
 
             {step === 2 && (
               <div className="my-auto space-y-4 animate-in fade-in slide-in-from-right-4 duration-150">
-                <div>
-                  <label className="text-xs font-bold text-muted-foreground uppercase">Status jednostki</label>
-                  <div className="mt-2 grid grid-cols-2 gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setStatus("completed")}
-                      className={cn(
-                        "rounded-xl border-2 p-4 text-left transition active:scale-95",
-                        status === "completed"
-                          ? "border-foreground bg-primary text-primary-foreground shadow-[3px_3px_0_0_var(--foreground)]"
-                          : "border-foreground/15 bg-card"
-                      )}
-                    >
-                      <span className="font-heading text-xl uppercase">Zrealizowany</span>
-                      <span className="mt-1 block text-xs opacity-85">Do natychmiastowej oceny składu</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setStatus("scheduled")}
-                      className={cn(
-                        "rounded-xl border-2 p-4 text-left transition active:scale-95",
-                        status === "scheduled"
-                          ? "border-foreground bg-primary text-primary-foreground shadow-[3px_3px_0_0_var(--foreground)]"
-                          : "border-foreground/15 bg-card"
-                      )}
-                    >
-                      <span className="font-heading text-xl uppercase">Zaplanowany</span>
-                      <span className="mt-1 block text-xs opacity-85">Ocena odblokuje się po treningu</span>
-                    </button>
-                  </div>
+                <div className="rounded-xl border-2 border-foreground/15 bg-card p-4">
+                  <p className="text-xs font-bold uppercase text-muted-foreground">Status jednostki</p>
+                  <p className="mt-1 font-heading text-xl uppercase">Zaplanowany</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Trening zostanie oznaczony jako zrealizowany dopiero po pełnej ocenie składu.
+                  </p>
                 </div>
 
                 <div>
