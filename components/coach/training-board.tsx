@@ -266,6 +266,7 @@ export function TrainingBoard() {
 
   const [fieldId, setFieldId] = useState("");
   const [trainingType, setTrainingType] = useState(TRAINING_TYPES[0].id);
+  const [plannedRpe, setPlannedRpe] = useState(3);
   const [topic, setTopic] = useState("");
   const [mainGoal, setMainGoal] = useState("");
   const [orgNote, setOrgNote] = useState("");
@@ -560,6 +561,7 @@ export function TrainingBoard() {
       topic: topic.trim() || undefined,
       mainGoal: mainGoal.trim() || undefined,
       trainingType,
+      plannedRpe,
       organizationalNote: orgNote.trim() || undefined,
     });
 
@@ -568,6 +570,7 @@ export function TrainingBoard() {
       setTopic("");
       setMainGoal("");
       setOrgNote("");
+      setPlannedRpe(3);
       await loadData(true);
     } else {
       alert(res.error || "Wystąpił błąd podczas tworzenia jednostki.");
@@ -1522,6 +1525,19 @@ export function TrainingBoard() {
                     <Sparkles className="size-4" /> Gotowe do utworzenia
                   </p>
                   Pola poniżej są opcjonalne. Jeśli jesteś przy linii bocznej, kliknij od razu <strong>„Utwórz jednostkę”</strong>.
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-muted-foreground uppercase">Planowane RPE (1–5)</label>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    value={plannedRpe}
+                    onChange={(event) => setPlannedRpe(Number(event.target.value))}
+                    className="mt-2 w-full accent-primary"
+                  />
+                  <p className="text-center font-heading text-2xl">{plannedRpe}</p>
                 </div>
 
                 <div>

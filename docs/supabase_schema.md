@@ -138,6 +138,7 @@
 | `main_goal` | `text` |  Nullable |
 | `location` | `text` |  Nullable |
 | `training_type` | `text` |  Nullable |
+| `planned_rpe` | `smallint` |  Nullable, 1–5; planowane obciążenie jednostki |
 | `organizational_note` | `text` |  Nullable |
 | `status` | `training_status` |  |
 | `evaluation_status` | `evaluation_status` |  |

@@ -3,7 +3,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Users, Dumbbell } from "lucide-react";
+import { LogOut, Users, Dumbbell, ChartNoAxesCombined } from "lucide-react";
 import { PitchArt, PitchMark } from "@/components/landing/mark";
 import { signOutAction } from "@/app/actions/auth";
 import { useCoachStore } from "@/store/useCoachStore";
@@ -15,8 +15,11 @@ function CoachNav() {
   const pathname = usePathname();
   const isUnitsActive =
     pathname === "/trener" ||
-    (pathname.startsWith("/trener/") && !pathname.startsWith("/trener/zawodnicy"));
+    (pathname.startsWith("/trener/") &&
+      !pathname.startsWith("/trener/zawodnicy") &&
+      !pathname.startsWith("/trener/analiza"));
   const isSquadActive = pathname.startsWith("/trener/zawodnicy");
+  const isAnalyticsActive = pathname.startsWith("/trener/analiza");
 
   return (
     <nav className="flex items-center gap-2 sm:gap-4 text-sm" aria-label="Panel trenera">
@@ -45,6 +48,19 @@ function CoachNav() {
         <Users className="size-3.5" />
         <span>Kadra</span>
       </Link>
+
+      <Link
+        href="/trener/analiza"
+        className={cn(
+          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-1.5 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
+          isAnalyticsActive
+            ? "border-foreground bg-primary text-primary-foreground font-bold shadow-[2px_2px_0_0_var(--foreground)]"
+            : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
+        )}
+      >
+        <ChartNoAxesCombined className="size-3.5" />
+        <span>Analiza</span>
+      </Link>
     </nav>
   );
 }
@@ -59,6 +75,10 @@ function CoachNavFallback() {
       <span className="flex items-center gap-1.5 rounded-xl border-2 border-transparent text-muted-foreground px-3 py-1.5 font-heading text-xs uppercase tracking-wider">
         <Users className="size-3.5" />
         <span>Kadra</span>
+      </span>
+      <span className="flex items-center gap-1.5 rounded-xl border-2 border-transparent text-muted-foreground px-3 py-1.5 font-heading text-xs uppercase tracking-wider">
+        <ChartNoAxesCombined className="size-3.5" />
+        <span>Analiza</span>
       </span>
     </nav>
   );

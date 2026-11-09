@@ -27,6 +27,9 @@ Jednocześnie wymagania **BR-024**, **BR-072** oraz **BR-084** nakładają obowi
    ```sql
    SELECT * FROM public.v_player_analytics WHERE player_id = $1;
    ```
+   Analiza trenera korzysta dodatkowo z planowanego RPE zapisanego przy treningu. Sygnalizator
+   porównuje średnie RPE z ostatnich trzech ukończonych jednostek ze średnią bazową zawodnika,
+   a widok „Plan vs Realia” zestawia plan trenera z odpowiedziami ankiet.
 
 2. **Dziennik Audytu (`audit_logs`) jako mechanizm wewnętrzny**:
    - Utworzono tabelę zdarzeniową ze strukturami `old_data JSONB` i `new_data JSONB`.

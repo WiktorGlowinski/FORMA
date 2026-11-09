@@ -163,6 +163,36 @@ export interface CoachField {
   name: string;
 }
 
+export interface CoachAnalyticsData {
+  periodStart: string;
+  periodEnd: string;
+  teams: Array<{ id: string; name: string }>;
+  scoreTrend: Array<{ date: string; plus: number; zero: number; minus: number }>;
+  wellbeingTrend: Array<{ date: string; fatigue: number | null; satisfaction: number | null }>;
+  surveyCompletion: { completed: number; issued: number; rate: number };
+  lockerStatuses: Array<{
+    playerId: string;
+    playerName: string;
+    status: "ready" | "warning" | "danger";
+    acwr: number | null;
+    recentRpe: number | null;
+  }>;
+  planVsReality: {
+    date: string | null;
+    plannedRpe: number | null;
+    actualRpe: number | null;
+    delta: number | null;
+  };
+  signals: Array<{
+    playerId: string;
+    playerName: string;
+    teamName: string;
+    kind: "negative_streak" | "high_fatigue" | "injury";
+    label: string;
+    description: string;
+  }>;
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message;
   if (
@@ -175,6 +205,244 @@ function getErrorMessage(error: unknown, fallback: string) {
   }
   return fallback;
 }
+
+export async function getCoachAnalyticsAction(): Promise<{
+  success: boolean;
+  data?: CoachAnalyticsData;
+  error?: string;
+}> {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: "Brak autoryzacji." };
+
+    const { data: assignments, error: assignmentError } = await supabase
+      .from("team_coaches")
+      .select("team_id, teams!inner(id, name, is_active)")
+      .eq("coach_id", user.id)
+      .is("revoked_at", null);
+    if (assignmentError) throw assignmentError;
+
+    const assignedTeams = (assignments || [])
+      .map((assignment) => {
+        const team = Array.isArray(assignment.teams) ? assignment.teams[0] : assignment.teams;
+        return team && team.is_active ? { id: team.id, name: team.name } : null;
+      })
+      .filter((team): team is { id: string; name: string } => team !== null);
+    const teamIds = assignedTeams.map((team) => team.id);
+
+    const periodEnd = new Date();
+    const periodStart = new Date(periodEnd);
+    periodStart.setDate(periodStart.getDate() - 30);
+    const periodStartIso = periodStart.toISOString().slice(0, 10);
+    const periodEndIso = periodEnd.toISOString().slice(0, 10);
+
+    if (teamIds.length === 0) {
+      return {
+        success: true,
+        data: {
+          periodStart: periodStartIso,
+          periodEnd: periodEndIso,
+          teams: [],
+          scoreTrend: [],
+          wellbeingTrend: [],
+          surveyCompletion: { completed: 0, issued: 0, rate: 0 },
+          lockerStatuses: [],
+          planVsReality: { date: null, plannedRpe: null, actualRpe: null, delta: null },
+          signals: [],
+        },
+      };
+    }
+
+    const [trainingsRes, playersRes] = await Promise.all([
+      supabase
+        .from("trainings")
+        .select("id, team_id, date, status, planned_rpe")
+        .in("team_id", teamIds)
+        .gte("date", periodStartIso)
+        .lte("date", periodEndIso)
+        .eq("status", "completed")
+        .order("date"),
+      supabase
+        .from("players")
+        .select("id, first_name, last_name, current_team_id")
+        .in("current_team_id", teamIds)
+        .eq("is_active", true),
+    ]);
+    if (trainingsRes.error) throw trainingsRes.error;
+    if (playersRes.error) throw playersRes.error;
+
+    const trainings = trainingsRes.data || [];
+    const trainingIds = trainings.map((training) => training.id);
+    const [evaluationsRes, surveysRes] = await Promise.all([
+      trainingIds.length > 0
+        ? supabase
+            .from("evaluations")
+            .select("training_id, player_id, is_present, score, absence_reason, created_at")
+            .in("training_id", trainingIds)
+        : Promise.resolve({ data: [], error: null }),
+      trainingIds.length > 0
+        ? supabase
+            .from("post_training_surveys")
+            .select("training_id, player_id, is_completed, fatigue, satisfaction")
+            .in("training_id", trainingIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (evaluationsRes.error) throw evaluationsRes.error;
+    if (surveysRes.error) throw surveysRes.error;
+
+    const teamNameById = new Map(assignedTeams.map((team) => [team.id, team.name]));
+    const dateByTrainingId = new Map(trainings.map((training) => [training.id, training.date]));
+    const evaluationsByTraining = new Map<string, typeof evaluationsRes.data>();
+    (evaluationsRes.data || []).forEach((evaluation) => {
+      const rows = evaluationsByTraining.get(evaluation.training_id) || [];
+      rows.push(evaluation);
+      evaluationsByTraining.set(evaluation.training_id, rows);
+    });
+    const scoreByDate = new Map<string, { plus: number; zero: number; minus: number }>();
+    trainings.forEach((training) => {
+      const current = scoreByDate.get(training.date) || { plus: 0, zero: 0, minus: 0 };
+      (evaluationsByTraining.get(training.id) || []).forEach((row) => {
+        if (!row.is_present) return;
+        if (row.score === "+") current.plus += 1;
+        else if (row.score === "0") current.zero += 1;
+        else if (row.score === "-") current.minus += 1;
+      });
+      scoreByDate.set(training.date, current);
+    });
+    const scoreTrend = Array.from(scoreByDate, ([date, scores]) => ({ date, ...scores }));
+
+    const surveysByDate = new Map<string, { fatigue: number[]; satisfaction: number[] }>();
+    (surveysRes.data || []).filter((survey) => survey.is_completed).forEach((survey) => {
+      const date = dateByTrainingId.get(survey.training_id);
+      if (!date) return;
+      const current = surveysByDate.get(date) || { fatigue: [], satisfaction: [] };
+      if (survey.fatigue != null) current.fatigue.push(survey.fatigue);
+      if (survey.satisfaction != null) current.satisfaction.push(survey.satisfaction);
+      surveysByDate.set(date, current);
+    });
+    const average = (values: number[]) =>
+      values.length > 0 ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)) : null;
+    const wellbeingTrend = Array.from(surveysByDate.keys())
+      .sort()
+      .map((date) => {
+        const values = surveysByDate.get(date);
+        return {
+          date,
+          fatigue: average(values?.fatigue || []),
+          satisfaction: average(values?.satisfaction || []),
+        };
+      });
+
+    const issuedSurveys = surveysRes.data || [];
+    const completedSurveys = issuedSurveys.filter((survey) => survey.is_completed).length;
+    const playerById = new Map((playersRes.data || []).map((player) => [player.id, player]));
+    const completedSurveyRows = issuedSurveys.filter(
+      (survey) => survey.is_completed && survey.fatigue != null
+    );
+    const recentTrainingIds = new Set(
+      trainings
+        .slice()
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, 3)
+        .map((training) => training.id)
+    );
+    const lockerStatuses = (playersRes.data || []).map((player) => {
+      const values = completedSurveyRows
+        .filter((survey) => survey.player_id === player.id)
+        .map((survey) => ({ value: survey.fatigue as number, recent: recentTrainingIds.has(survey.training_id) }));
+      const recentValues = values.filter((item) => item.recent).map((item) => item.value);
+      const allValues = values.map((item) => item.value);
+      const averageValue = (items: number[]) =>
+        items.length ? items.reduce((sum, value) => sum + value, 0) / items.length : null;
+      const recentRpe = averageValue(recentValues);
+      const baseRpe = averageValue(allValues);
+      const acwr = recentRpe != null && baseRpe ? Number((recentRpe / baseRpe).toFixed(2)) : null;
+      return {
+        playerId: player.id,
+        playerName: `${player.first_name} ${player.last_name}`,
+        status: (acwr == null || acwr <= 1.2 ? "ready" : acwr <= 1.5 ? "warning" : "danger") as
+          "ready" | "warning" | "danger",
+        acwr,
+        recentRpe: recentRpe == null ? null : Number(recentRpe.toFixed(1)),
+      };
+    });
+    const latestTraining = trainings.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+    const latestValues = latestTraining
+      ? completedSurveyRows
+          .filter((survey) => survey.training_id === latestTraining.id)
+          .map((survey) => survey.fatigue as number)
+      : [];
+    const actualRpe = latestValues.length
+      ? Number((latestValues.reduce((sum, value) => sum + value, 0) / latestValues.length).toFixed(1))
+      : null;
+    const evaluationsByPlayer = new Map<string, typeof evaluationsRes.data>();
+    (evaluationsRes.data || []).forEach((evaluation) => {
+      const rows = evaluationsByPlayer.get(evaluation.player_id) || [];
+      rows.push(evaluation);
+      evaluationsByPlayer.set(evaluation.player_id, rows);
+    });
+    const signals: CoachAnalyticsData["signals"] = [];
+    evaluationsByPlayer.forEach((rows, playerId) => {
+      const player = playerById.get(playerId);
+      if (!player) return;
+      const sorted = [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      const recentScores = sorted.filter((row) => row.is_present && row.score).slice(0, 3);
+      if (recentScores.length >= 3 && recentScores.every((row) => row.score === "-")) {
+        signals.push({
+          playerId,
+          playerName: `${player.first_name} ${player.last_name}`,
+          teamName: teamNameById.get(player.current_team_id || "") || "Drużyna",
+          kind: "negative_streak",
+          label: "Seria ocen −",
+          description: "Trzy ostatnie oceny są poniżej typowego poziomu.",
+        });
+      }
+      const latestInjury = sorted.find((row) => !row.is_present && row.absence_reason === "injury");
+      if (latestInjury) {
+        signals.push({
+          playerId,
+          playerName: `${player.first_name} ${player.last_name}`,
+          teamName: teamNameById.get(player.current_team_id || "") || "Drużyna",
+          kind: "injury",
+          label: "Kontuzja",
+          description: "Ostatnia odnotowana absencja wynikała z kontuzji.",
+        });
+      }
+    });
+
+    return {
+      success: true,
+      data: {
+        periodStart: periodStartIso,
+        periodEnd: periodEndIso,
+        teams: assignedTeams,
+        scoreTrend,
+        wellbeingTrend,
+        surveyCompletion: {
+          completed: completedSurveys,
+          issued: issuedSurveys.length,
+          rate: issuedSurveys.length > 0 ? Math.round((completedSurveys / issuedSurveys.length) * 100) : 0,
+        },
+        lockerStatuses,
+        planVsReality: {
+          date: latestTraining?.date || null,
+          plannedRpe: latestTraining?.planned_rpe || null,
+          actualRpe,
+          delta:
+            latestTraining?.planned_rpe != null && actualRpe != null
+              ? Number((actualRpe - latestTraining.planned_rpe).toFixed(1))
+              : null,
+        },
+        signals,
+      },
+    };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udało się przygotować analizy zespołu.") };
+  }
+}
+
+
 
 export async function getCoachFieldsAction(): Promise<{
   success: boolean;
@@ -494,6 +762,7 @@ export async function createTrainingAction(payload: {
   topic?: string;
   mainGoal?: string;
   trainingType?: string;
+  plannedRpe?: number;
   organizationalNote?: string;
 }) {
   try {
@@ -565,6 +834,7 @@ export async function createTrainingAction(payload: {
         topic: payload.topic || null,
         main_goal: payload.mainGoal || null,
         training_type: payload.trainingType || null,
+        planned_rpe: payload.plannedRpe ?? null,
         organizational_note: payload.organizationalNote || null,
         status: "scheduled",
         evaluation_status: "unrated",
