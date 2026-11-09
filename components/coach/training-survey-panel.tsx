@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { 
   Copy, 
   Check, 
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SurveyStatusItem, SurveySummary } from "@/app/actions/coach";
+import { useSurveyStore } from "@/store/useSurveyStore";
 
 interface TrainingSurveyPanelProps {
   surveys: SurveyStatusItem[];
@@ -27,16 +27,18 @@ export function TrainingSurveyPanel({
   summary,
   shareText,
 }: TrainingSurveyPanelProps) {
-  const [copied, setCopied] = useState(false);
-  const [showFullSquadList, setShowFullSquadList] = useState(false);
+  const copied = useSurveyStore((state) => state.allCopied);
+  const showFullSquadList = useSurveyStore((state) => state.showFullSquadList);
+  const setAllCopied = useSurveyStore((state) => state.setAllCopied);
+  const setShowFullSquadList = useSurveyStore((state) => state.setShowFullSquadList);
 
   const isExpired = summary?.isExpired ?? false;
 
   const handleCopyLink = () => {
     if (!shareText) return;
     navigator.clipboard.writeText(shareText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setAllCopied(true);
+    setTimeout(() => setAllCopied(false), 2000);
   };
 
   // =========================================================================
@@ -164,7 +166,7 @@ export function TrainingSurveyPanel({
         <div className="pt-2 border-t border-border/80">
           <button
             type="button"
-            onClick={() => setShowFullSquadList((prev) => !prev)}
+            onClick={() => setShowFullSquadList(!showFullSquadList)}
             className="flex w-full items-center justify-between py-1 text-xs font-heading uppercase text-muted-foreground hover:text-foreground transition"
           >
             <span>Szczegółowa lista odpowiedzi zawodników ({surveys.length})</span>

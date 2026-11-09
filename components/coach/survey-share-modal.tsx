@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import type { SurveyStatusItem } from "@/app/actions/coach";
+import { useSurveyStore } from "@/store/useSurveyStore";
 
 interface SurveyShareModalProps {
   isOpen: boolean;
@@ -11,8 +11,10 @@ interface SurveyShareModalProps {
 }
 
 export function SurveyShareModal({ isOpen, onClose, surveys, shareText }: SurveyShareModalProps) {
-  const [copiedPlayerId, setCopiedPlayerId] = useState<string | null>(null);
-  const [allCopied, setAllCopied] = useState(false);
+  const copiedPlayerId = useSurveyStore((state) => state.copiedPlayerId);
+  const allCopied = useSurveyStore((state) => state.allCopied);
+  const setCopiedPlayerId = useSurveyStore((state) => state.setCopiedPlayerId);
+  const setAllCopied = useSurveyStore((state) => state.setAllCopied);
 
   if (!isOpen) return null;
 

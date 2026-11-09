@@ -1,46 +1,56 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect } from "react";
 import { useParams } from "next/navigation";
 import {
   getPublicSurveySession,
   submitPublicSurveyResponse,
-  type PublicSurveyInfo,
 } from "@/app/actions/surveys";
+import { useSurveyStore } from "@/store/useSurveyStore";
 
 function SurveyContent() {
   const params = useParams();
   const token = params?.trainingId as string;
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<PublicSurveyInfo | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [isExpired, setIsExpired] = useState(false);
-  const [fatigue, setFatigue] = useState(3);
-  const [satisfaction, setSatisfaction] = useState(4);
-  const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState(false);
+  const {
+    data,
+    loading,
+    error: errorMsg,
+    isExpired,
+    fatigue,
+    satisfaction,
+    note,
+    submitting,
+    formError,
+    submitted,
+    setSession,
+    setLoadError,
+    setFatigue,
+    setSatisfaction,
+    setNote,
+    setSubmitting,
+    setFormError,
+    markSubmitted,
+    reset,
+  } = useSurveyStore();
 
   useEffect(() => {
+    reset();
     let active = true;
     async function loadSurvey() {
       const result = await getPublicSurveySession(token);
       if (!active) return;
       if (!result.success) {
-        setIsExpired(Boolean(result.isExpired));
-        setErrorMsg(result.error || "Nie udało się załadować ankiety.");
+        setLoadError(result.error || "Nie udało się załadować ankiety.", Boolean(result.isExpired));
       } else {
-        setData(result.data || null);
+        setSession(result.data || null);
       }
-      setLoading(false);
     }
 
     if (token) void loadSurvey();
     return () => {
       active = false;
     };
-  }, [token]);
+  }, [reset, setLoadError, setSession, token]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -54,13 +64,12 @@ function SurveyContent() {
       satisfaction,
       feedbackNote: note,
     });
-    setSubmitting(false);
-
     if (!result.success) {
+      setSubmitting(false);
       setFormError(result.error || "Nie udało się zapisać odpowiedzi.");
       return;
     }
-    setSubmitted(true);
+    markSubmitted();
   }
 
   if (loading) {
