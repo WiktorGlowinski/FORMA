@@ -14,30 +14,28 @@ export async function loginAction(formData: FormData) {
   }
 
   const supabase = await createClient();
-  const { data: authData, error } = await supabase.auth.signInWithPassword({ 
-    email, 
-    password 
+  const { data: authData, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
   });
 
   if (error || !authData.user) {
     return { success: false, error: 'Błędny email lub hasło.' };
   }
 
-  // 1. Sprawdzamy rolę bezpośrednio z JWT (0 ms opóźnienia z bazy)
-  let role = authData.user.app_metadata?.role;
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role, is_active')
+    .eq('id', authData.user.id)
+    .maybeSingle();
 
-  // 2. Tylko w ostateczności (gdyby JWT jeszcze nie miało roli) pytamy bazę danych
-  if (!role) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', authData.user.id)
-      .maybeSingle();
-
-    role = profile?.role;
+  if (!profile || profile.is_active === false) {
+    await supabase.auth.signOut();
+    return { success: false, error: 'To konto jest wyłączone. Skontaktuj się z administratorem klubu.' };
   }
 
-// Przekierowanie zależne od roli
+  const role = authData.user.app_metadata?.role || profile.role;
+
   let redirectTo = '/trener';
   if (role === 'master_admin') {
     redirectTo = '/master-admin';
@@ -132,11 +130,18 @@ export const getSessionContext = cache(async () => {
 
   if (error || !user) return null;
 
-  // Jeśli profil ma już dane w app_metadata, nie musimy odpytywać bazy
   const metaRole = user.app_metadata?.role;
   const metaClubId = user.app_metadata?.club_id;
 
   if (metaRole && metaClubId) {
+    const { data: gate } = await supabase
+      .from('profiles')
+      .select('is_active')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (!gate || gate.is_active === false) return null;
+
     return {
       userId: user.id,
       clubId: metaClubId,
@@ -145,14 +150,13 @@ export const getSessionContext = cache(async () => {
     };
   }
 
-  // Fallback bazodanowy jeśli metadane nie były zsynchronizowane
   const { data: profile } = await supabase
     .from('profiles')
-    .select('club_id, role, full_name')
+    .select('club_id, role, full_name, is_active')
     .eq('id', user.id)
     .maybeSingle();
 
-  if (profile) {
+  if (profile && profile.is_active !== false) {
     return {
       userId: user.id,
       clubId: profile.club_id,
