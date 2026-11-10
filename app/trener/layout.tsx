@@ -2,7 +2,7 @@ export const instant = false;
 
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase-server";
+import { getActiveStaff } from "@/lib/access";
 import { CoachShell } from "@/components/coach/coach-shell";
 
 export default async function TrenerLayout({
@@ -11,9 +11,8 @@ export default async function TrenerLayout({
   children: React.ReactNode;
 }) {
   await connection();
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  const staff = await getActiveStaff();
+  if (!staff) redirect("/login");
 
-  return <CoachShell userId={user.id}>{children}</CoachShell>;
+  return <CoachShell userId={staff.user.id}>{children}</CoachShell>;
 }

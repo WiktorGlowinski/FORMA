@@ -22,11 +22,15 @@ export default async function CoordinatorLayout({
 
     const { data: profile } = await supabase
         .from('profiles')
-        .select('role')
+        .select('role, is_active')
         .eq('id', user.id)
         .maybeSingle()
 
-    if (!profile || !['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
+    if (!profile || profile.is_active === false) {
+        redirect('/login')
+    }
+
+    if (!['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
         redirect('/trener')
     }
 
