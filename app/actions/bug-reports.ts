@@ -10,8 +10,15 @@ async function getReporter() {
   const supabase = await createClient();
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) throw new Error("Zaloguj się, aby wysłać zgłoszenie.");
-  const { data: profile } = await supabase.from("profiles").select("club_id").eq("id", user.id).maybeSingle();
-  return { user, clubId: profile?.club_id || null };
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("club_id, is_active")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (!profile || profile.is_active === false) {
+    throw new Error("Konto jest wyłączone.");
+  }
+  return { user, clubId: profile.club_id || null };
 }
 
 export async function submitBugReportAction(formData: FormData) {
@@ -72,8 +79,14 @@ export async function submitBugReportAction(formData: FormData) {
 export async function getMasterBugReportsAction() {
   try {
     const { user } = await getReporter();
-    const { data: profile } = await supabaseAdmin.from("profiles").select("role").eq("id", user.id).maybeSingle();
-    if (profile?.role !== "master_admin") throw new Error("Brak uprawnień.");
+    const { data: profile } = await supabaseAdmin
+      .from("profiles")
+      .select("role, is_active")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (!profile || profile.is_active === false || profile.role !== "master_admin") {
+      throw new Error("Brak uprawnień.");
+    }
     const { data, error } = await supabaseAdmin
       .from("bug_reports")
       .select("id, user_id, club_id, title, description, category, priority, page_url, browser_info, screenshot_path, status, admin_note, created_at, resolved_at")
@@ -94,8 +107,14 @@ export async function getMasterBugReportsAction() {
 export async function updateMasterBugReportAction(reportId: string, status: string, adminNote: string) {
     try {
       const { user } = await getReporter();
-      const { data: profile } = await supabaseAdmin.from("profiles").select("role").eq("id", user.id).maybeSingle();
-      if (profile?.role !== "master_admin") throw new Error("Brak uprawnień.");
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("role, is_active")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (!profile || profile.is_active === false || profile.role !== "master_admin") {
+        throw new Error("Brak uprawnień.");
+      }
       if (!["new", "in_progress", "resolved", "rejected"].includes(status)) {
         throw new Error("Nieprawidłowy status.");
       }

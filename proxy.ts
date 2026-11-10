@@ -17,8 +17,12 @@ function withSecurityHeaders(response: NextResponse) {
   const headers = response.headers;
   const dev = process.env.NODE_ENV !== "production";
   const remote = supabaseConnectSrc();
-  const script = dev ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'" : "script-src 'self' 'unsafe-inline'";
-  const connect = ["connect-src 'self'", remote, dev ? "ws:" : ""].filter(Boolean).join(" ");
+  const script = dev
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+    : "script-src 'self' 'unsafe-inline'";
+  const connect = ["connect-src 'self'", remote, dev ? "ws:" : ""]
+    .filter(Boolean)
+    .join(" ");
   const imageOrigin = remote.split(" ")[0] ?? "";
 
   headers.set("X-Content-Type-Options", "nosniff");
@@ -47,16 +51,14 @@ function withSecurityHeaders(response: NextResponse) {
   return response;
 }
 
-export async function middleware(request: NextRequest) {
-  const pathname = request.nextUrl.pathname;
+function isPublicRoute(pathname: string) {
+  const publicRoots = ["/survey", "/ankieta", "/login", "/reset-hasla"];
+  return pathname === "/" || publicRoots.some(
+    (root) => pathname === root || pathname.startsWith(`${root}/`),
+  );
+}
 
-  const isPublicRoute =
-    pathname === "/" ||
-    pathname.startsWith("/survey") ||
-    pathname.startsWith("/ankieta") ||
-    pathname.startsWith("/login") ||
-    pathname.startsWith("/reset-hasla");
-
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request: { headers: request.headers } });
 
   const supabase = createServerClient(
@@ -69,18 +71,20 @@ export async function middleware(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
           response = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
+            response.cookies.set(name, value, options),
           );
         },
       },
-    }
+    },
   );
 
-  if (isPublicRoute) {
+  if (isPublicRoute(request.nextUrl.pathname)) {
     return withSecurityHeaders(response);
   }
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   if (!user) {
     return withSecurityHeaders(NextResponse.redirect(new URL("/login", request.url)));
