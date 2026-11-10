@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Users, Dumbbell, ChartNoAxesCombined } from "lucide-react";
+import { LogOut, Menu, X, Users, Dumbbell, ChartNoAxesCombined } from "lucide-react";
 import { PitchArt, PitchMark } from "@/components/landing/mark";
 import { signOutAction } from "@/app/actions/auth";
 import { useCoachStore } from "@/store/useCoachStore";
@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { BugReportWidget } from "@/components/bug-reports/bug-report-widget";
 
-function CoachNav() {
+function CoachNav({ onNavigate, mobile = false }: { onNavigate?: () => void; mobile?: boolean }) {
   const pathname = usePathname();
   const isUnitsActive =
     pathname === "/trener" ||
@@ -22,11 +22,18 @@ function CoachNav() {
   const isAnalyticsActive = pathname.startsWith("/trener/analiza");
 
   return (
-    <nav className="flex items-center gap-2 sm:gap-4 text-sm" aria-label="Panel trenera">
+    <nav
+      className={cn(
+        "text-sm",
+        mobile ? "flex flex-col gap-2" : "hidden items-center gap-2 sm:flex sm:gap-4",
+      )}
+      aria-label="Panel trenera"
+    >
       <Link
         href="/trener"
+        onClick={onNavigate}
         className={cn(
-          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-1.5 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
+          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-2 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
           isUnitsActive
             ? "border-foreground bg-primary text-primary-foreground font-bold shadow-[2px_2px_0_0_var(--foreground)]"
             : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -38,8 +45,9 @@ function CoachNav() {
 
       <Link
         href="/trener/zawodnicy"
+        onClick={onNavigate}
         className={cn(
-          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-1.5 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
+          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-2 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
           isSquadActive
             ? "border-foreground bg-primary text-primary-foreground font-bold shadow-[2px_2px_0_0_var(--foreground)]"
             : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -51,8 +59,9 @@ function CoachNav() {
 
       <Link
         href="/trener/analiza"
+        onClick={onNavigate}
         className={cn(
-          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-1.5 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
+          "flex items-center gap-1.5 rounded-xl border-2 px-3 py-2 font-heading text-xs uppercase tracking-wider transition-all active:scale-95",
           isAnalyticsActive
             ? "border-foreground bg-primary text-primary-foreground font-bold shadow-[2px_2px_0_0_var(--foreground)]"
             : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -113,11 +122,9 @@ export function CoachShell({ children, userId }: { children: React.ReactNode; us
               <CoachNav />
             </Suspense>
 
-            <div className="h-5 w-px bg-border/80 mx-1 hidden sm:block" />
+            <MobileCoachMenu />
 
-            <Link href="/" className="pitch-link text-xs text-muted-foreground hidden sm:block">
-              Start
-            </Link>
+            <div className="h-5 w-px bg-border/80 mx-1 hidden sm:block" />
 
             <button
               type="button"
@@ -137,6 +144,36 @@ export function CoachShell({ children, userId }: { children: React.ReactNode; us
       </main>
       <AssistantWidget key={userId} userId={userId} />
       <BugReportWidget />
+    </div>
+  );
+}
+
+function MobileCoachMenu() {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className="relative sm:hidden">
+      <button
+        type="button"
+        onClick={() => setIsOpen((open) => !open)}
+        aria-expanded={isOpen}
+        aria-controls="coach-mobile-menu"
+        className="inline-flex size-9 items-center justify-center rounded-xl border-2 border-foreground/20 transition hover:border-foreground active:scale-95"
+      >
+        <span className="sr-only">{isOpen ? "Zamknij menu" : "Otwórz menu"}</span>
+        {isOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+      </button>
+
+      {isOpen && (
+        <div
+          id="coach-mobile-menu"
+          className="absolute right-0 top-12 z-50 w-56 rounded-2xl border-2 border-foreground/15 bg-background p-3 shadow-[3px_3px_0_0_var(--foreground)]"
+        >
+          <Suspense fallback={<CoachNavFallback />}>
+            <CoachNav mobile onNavigate={() => setIsOpen(false)} />
+          </Suspense>
+        </div>
+      )}
     </div>
   );
 }
