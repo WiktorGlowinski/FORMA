@@ -197,6 +197,12 @@
   transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
+.coordinator-scroll-header {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 40 !important;
+}
+
 .print-card:hover {
   transform: translate(-3px, -3px);
   box-shadow: 5px 5px 0 0 var(--foreground);

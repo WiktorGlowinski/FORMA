@@ -363,6 +363,22 @@ function getGeminiApiKey() {
   return apiKey;
 }
 
+function getAssistantTrainingHref(profile: AssistantProfile, trainingId: string) {
+  if (profile.role === "coach") return `/trener/${trainingId}`;
+  if (profile.role === "coordinator") return `/koordynator/trening/${trainingId}`;
+  return null;
+}
+
+function getAssistantPlayerHref(profile: AssistantProfile, playerId: string) {
+  if (profile.role === "coach") return `/trener/zawodnicy/${playerId}`;
+  if (profile.role === "coordinator") return `/koordynator/zawodnik/${playerId}`;
+  return "/admin/zawodnicy";
+}
+
+function getAssistantTeamsHref(profile: AssistantProfile) {
+  return profile.role === "coordinator" ? "/koordynator#analiza" : "/admin/druzyny";
+}
+
 function validateHistory(history: unknown): AssistantHistoryMessage[] {
   if (!Array.isArray(history)) return [];
   return history
@@ -380,6 +396,7 @@ function validateHistory(history: unknown): AssistantHistoryMessage[] {
 }
 
 async function requestAssistantPlan(
+  profile: AssistantProfile,
   message: string,
   history: AssistantHistoryMessage[]
 ): Promise<AssistantPlan> {
@@ -398,6 +415,7 @@ async function requestAssistantPlan(
     "Wyszukiwanie zawodnika: użyj search_players, a data zawiera playerName z pełnym imieniem i nazwiskiem oraz opcjonalne teamName. Szukaj wyłącznie konkretnej osoby, nigdy nie proś o pobranie całej kadry. Jeśli brak nazwiska, dopytaj.",
     "Cała drużyna/kadra/skład: użyj search_team. data zawiera teamName. Zwróć wszystkich zawodników tej drużyny, gdy użytkownik prosi o całą drużynę, kadrę, skład lub listę zawodników. Nie pokazuj drużyn spoza uprawnień użytkownika.",
     "Wszystkie drużyny użytkownika/klubu: użyj search_teams, gdy użytkownik pyta o swoje drużyny, wszystkie drużyny, drużyny które obsługuje lub chce listę drużyn. Trener może zobaczyć tylko przypisane drużyny, admin i koordynator cały aktywny klub.",
+    `Użytkownik ma rolę ${profile.role}. Dla roli coordinator pełnisz funkcję analityka klubu: pomagaj przeglądać zawodników, historię ich ocen i obecności, szczegóły treningów oraz składy drużyn. Nie kieruj koordynatora do panelu trenera ani do widoków, do których nie ma uprawnień.`,
     "CSV i zawodnicy: data zawiera players jako tablicę obiektów {firstName,lastName,birthYear,jerseyNumber,phone,email,parentName,parentPhone,parentEmail}, oraz opcjonalne teamName. Nigdy nie wymyślaj danych kontaktowych ani numerów; brakujące pola zostaw puste. Rozpoznaj generate_csv dla prośby o plik, create_players dla prośby o zapis zawodników do bazy.",
     "Tworzenie treningu: data zawiera teamName, fieldName, date (YYYY-MM-DD), startTime i endTime (HH:mm), topic, mainGoal, trainingType, organizationalNote. Brakujące wymagane dane dopytaj użytkownika i ustaw action na none.",
     "Jeśli brakuje daty przy wyszukiwaniu albo brakuje informacji potrzebnych do bezpiecznego wykonania zadania, zadaj krótkie pytanie, użyj action none i nie zgaduj.",
@@ -598,7 +616,7 @@ async function searchTrainings(profile: AssistantProfile, data: Record<string, u
       organizationalNote: training.organizational_note,
       field: training.location,
       status: training.status,
-      href: profile.role === "coach" ? `/trener/${training.id}` : null,
+      href: getAssistantTrainingHref(profile, training.id),
     };
   });
   if (result.length === 0) return { reply: "Nie znalazłem treningów pasujących do tych kryteriów.", trainings: result };
@@ -656,7 +674,7 @@ async function searchPlayers(profile: AssistantProfile, data: Record<string, unk
       birthYear: player.birth_year,
       jerseyNumber: player.jersey_number,
       teamName: team?.name || "Brak drużyny",
-      href: profile.role === "coach" ? `/trener/zawodnicy/${player.id}` : "/admin/zawodnicy",
+      href: getAssistantPlayerHref(profile, player.id),
     };
   });
 
@@ -703,7 +721,7 @@ async function searchTeam(profile: AssistantProfile, data: Record<string, unknow
     birthYear: player.birth_year,
     jerseyNumber: player.jersey_number,
     teamName: teamData.name,
-    href: profile.role === "coach" ? `/trener/zawodnicy/${player.id}` : "/admin/zawodnicy",
+    href: getAssistantPlayerHref(profile, player.id),
   }));
 
   return {
@@ -716,7 +734,7 @@ async function searchTeam(profile: AssistantProfile, data: Record<string, unknow
       ageGroup: teamData.age_group,
       playerCount: players.length,
       players,
-      href: profile.role === "coach" ? null : "/admin/druzyny",
+      href: getAssistantTeamsHref(profile),
     }],
   };
 }
@@ -761,7 +779,7 @@ async function searchTeams(profile: AssistantProfile) {
       birthYear: player.birth_year,
       jerseyNumber: player.jersey_number,
       teamName: team.name,
-      href: profile.role === "coach" ? `/trener/zawodnicy/${player.id}` : "/admin/zawodnicy",
+      href: getAssistantPlayerHref(profile, player.id),
     });
     playersByTeam.set(team.id, teamPlayers);
   }
@@ -774,7 +792,7 @@ async function searchTeams(profile: AssistantProfile) {
       ageGroup: team.age_group,
       playerCount: teamPlayers.length,
       players: teamPlayers,
-      href: profile.role === "coach" ? null : "/admin/druzyny",
+      href: getAssistantTeamsHref(profile),
     };
   });
 
@@ -965,7 +983,7 @@ export async function runAssistantAction(
     const history = validateHistory(rawHistory);
     let plan: AssistantPlan;
     try {
-      plan = resolvePlanFromMessage(await requestAssistantPlan(message, history), message);
+      plan = resolvePlanFromMessage(await requestAssistantPlan(profile, message, history), message);
     } catch (error: unknown) {
       const rosterRequest = /\b(cał\w* drużyn\w*|kadr\w*|skład\w*|wszys\w* zawodnik\w*|lista zawodnik\w*)\b/i.test(message);
       const allTeamsRequest = /\b(moj\w* drużyn\w*|wszystk\w* drużyn\w*|drużyn\w* (które|ktore) (obsługuj\w*|obsluguj\w*|prowadz\w*)|jak\w* drużyn\w*|drużyn\w* mam)\b/i.test(message);
