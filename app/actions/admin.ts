@@ -520,7 +520,7 @@ export async function assignCoachToTeamAction(payload: {
       .select("id")
       .eq("id", payload.coachId)
       .eq("club_id", clubId)
-      .eq("role", "coach")
+      .in("role", ["coach", "coordinator"])
       .maybeSingle();
 
     if (coachError) throw coachError;

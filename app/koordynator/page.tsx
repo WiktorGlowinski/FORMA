@@ -50,7 +50,9 @@ export default async function CoordinatorPage() {
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Panel koordynatora · ostatnie 30 dni</p>
           <h1 className="mt-1 font-heading text-4xl uppercase tracking-tight sm:text-5xl">{result.clubName}</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Zakres: cały klub · dane od {formatDate(result.periodStart)}. Oceny `- / 0 / +` opisują zmianę względem własnego poziomu zawodnika, nie ranking.
+            {result.role === 'coordinator'
+              ? `Zakres odpowiedzialności: ${result.scopeTeamCount} przypisanych zespołów`
+              : 'Zakres: wszystkie zespoły klubu'} · dane od {formatDate(result.periodStart)}. Oceny `- / 0 / +` opisują zmianę względem własnego poziomu zawodnika, nie ranking.
           </p>
         </div>
         {canManageTeams && <CoordinatorTeamForm />}
@@ -81,9 +83,13 @@ export default async function CoordinatorPage() {
 
       {teams.length === 0 ? (
         <section className="rounded-2xl border-2 border-foreground/15 bg-card p-8 text-center">
-          <h2 className="font-heading text-2xl uppercase">Brak zespołów w klubie</h2>
+          <h2 className="font-heading text-2xl uppercase">
+            {result.role === 'coordinator' ? 'Brak zespołów w zakresie' : 'Brak zespołów w klubie'}
+          </h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Gdy administrator doda zespół i przypisze mu zawodników, pojawią się tu raporty.
+            {result.role === 'coordinator'
+              ? 'Administrator musi przypisać zespoły do Twojego profilu, aby pojawiły się tu raporty.'
+              : 'Gdy administrator doda zespół i przypisze mu zawodników, pojawią się tu raporty.'}
           </p>
         </section>
       ) : (

@@ -157,7 +157,7 @@ export async function getCoordinatorDashboardAction() {
         .from('profiles')
         .select('id, full_name')
         .eq('club_id', profile.club_id)
-        .eq('role', 'coach')
+        .in('role', ['coach', 'coordinator'])
         .limit(2000),
     ]);
 
@@ -165,13 +165,9 @@ export async function getCoordinatorDashboardAction() {
     if (playersResult.error) throw playersResult.error;
     if (coachesResult.error) throw coachesResult.error;
 
-    const teams = teamsResult.data || [];
+    let teams = teamsResult.data || [];
     const players = playersResult.data || [];
-    const teamIds = teams.map((team) => team.id);
-    const teamIdSet = new Set(teamIds);
-    const activePlayers = players.filter(
-      (player) => player.current_team_id && teamIdSet.has(player.current_team_id) && player.is_active !== false
-    );
+    let teamIds = teams.map((team) => team.id);
 
     const coachesById = new Map((coachesResult.data || []).map((coach) => [coach.id, coach.full_name || 'Trener']));
     const today = new Date().toISOString().slice(0, 10);
@@ -200,7 +196,21 @@ export async function getCoordinatorDashboardAction() {
     if (assignmentsResult.error) throw assignmentsResult.error;
     if (trainingsResult.error) throw trainingsResult.error;
 
-    const trainings = trainingsResult.data || [];
+    if (profile.role === 'coordinator') {
+      const assignedTeamIds = new Set(
+        (assignmentsResult.data || [])
+          .filter((assignment) => assignment.coach_id === user.id)
+          .map((assignment) => assignment.team_id)
+      );
+      teams = teams.filter((team) => assignedTeamIds.has(team.id));
+      teamIds = teams.map((team) => team.id);
+    }
+
+    const teamIdSet = new Set(teamIds);
+    const activePlayers = players.filter(
+      (player) => player.current_team_id && teamIdSet.has(player.current_team_id) && player.is_active !== false
+    );
+    const trainings = (trainingsResult.data || []).filter((training) => teamIdSet.has(training.team_id));
     const trainingIds = trainings.map((training) => training.id);
     const [evaluationsResult, surveysResult] = await Promise.all([
       trainingIds.length > 0
@@ -402,6 +412,7 @@ export async function getCoordinatorDashboardAction() {
       clubName: club?.name || 'Klub',
       role: profile.role,
       periodStart: cutoff,
+      scopeTeamCount: summaries.length,
       teams: summaries,
       metrics: {
         activeTeams: summaries.filter((team) => team.isActive).length,
@@ -447,6 +458,17 @@ export async function getCoordinatorPlayerAction(playerId: string) {
       return { success: false as const, error: 'Brak uprawnień do profilu zawodnika.' };
     }
 
+    let scopedTeamIds: Set<string> | null = null;
+    if (profile.role === 'coordinator') {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('team_coaches')
+        .select('team_id')
+        .eq('coach_id', user.id)
+        .eq('club_id', profile.club_id);
+      if (assignmentsError) throw assignmentsError;
+      scopedTeamIds = new Set((assignments || []).map((assignment) => assignment.team_id));
+    }
+
     const [playerResult, teamsResult] = await Promise.all([
       supabase
         .from('players')
@@ -462,6 +484,9 @@ export async function getCoordinatorPlayerAction(playerId: string) {
     if (playerResult.error) throw playerResult.error;
     if (teamsResult.error) throw teamsResult.error;
     if (!playerResult.data) return { success: false as const, error: 'Nie znaleziono zawodnika w Twoim klubie.' };
+    if (scopedTeamIds && (!playerResult.data.current_team_id || !scopedTeamIds.has(playerResult.data.current_team_id))) {
+      return { success: false as const, error: 'Zawodnik nie należy do Twojego zakresu odpowiedzialności.' };
+    }
 
     const { data: evaluations, error: evaluationsError } = await supabase
       .from('evaluations')
@@ -541,6 +566,17 @@ export async function getCoordinatorTrainingAction(trainingId: string) {
       return { success: false as const, error: 'Brak uprawnień do treningu.' };
     }
 
+    let scopedTeamIds: Set<string> | null = null;
+    if (profile.role === 'coordinator') {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('team_coaches')
+        .select('team_id')
+        .eq('coach_id', user.id)
+        .eq('club_id', profile.club_id);
+      if (assignmentsError) throw assignmentsError;
+      scopedTeamIds = new Set((assignments || []).map((assignment) => assignment.team_id));
+    }
+
     const { data: training, error: trainingError } = await supabase
       .from('trainings')
       .select('id, club_id, team_id, date, topic, status, lead_coach_id, teams(id, name, age_group)')
@@ -549,6 +585,9 @@ export async function getCoordinatorTrainingAction(trainingId: string) {
       .maybeSingle();
     if (trainingError) throw trainingError;
     if (!training) return { success: false as const, error: 'Nie znaleziono treningu w Twoim klubie.' };
+    if (scopedTeamIds && !scopedTeamIds.has(training.team_id)) {
+      return { success: false as const, error: 'Trening nie należy do Twojego zakresu odpowiedzialności.' };
+    }
 
     const [playersResult, evaluationsResult, surveysResult, coachResult] = await Promise.all([
       supabase
@@ -645,6 +684,17 @@ export async function getCoordinatorEvaluationAction(evaluationId: string) {
       return { success: false as const, error: 'Brak uprawnień do oceny.' };
     }
 
+    let scopedTeamIds: Set<string> | null = null;
+    if (profile.role === 'coordinator') {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('team_coaches')
+        .select('team_id')
+        .eq('coach_id', user.id)
+        .eq('club_id', profile.club_id);
+      if (assignmentsError) throw assignmentsError;
+      scopedTeamIds = new Set((assignments || []).map((assignment) => assignment.team_id));
+    }
+
     const { data: evaluation, error: evaluationError } = await supabase
       .from('evaluations')
       .select(`
@@ -655,7 +705,7 @@ export async function getCoordinatorEvaluationAction(evaluationId: string) {
         is_present,
         absence_reason,
         comment,
-        trainings!inner(id, date, topic, status, club_id, teams(name, age_group)),
+        trainings!inner(id, team_id, date, topic, status, club_id, teams(name, age_group)),
         players!inner(first_name, last_name, jersey_number)
       `)
       .eq('id', evaluationId)
@@ -670,6 +720,9 @@ export async function getCoordinatorEvaluationAction(evaluationId: string) {
     const player = Array.isArray(evaluation.players) ? evaluation.players[0] : evaluation.players;
     if (!training || !player) {
       return { success: false as const, error: 'Brakuje powiązanego treningu lub zawodnika dla tej oceny.' };
+    }
+    if (scopedTeamIds && !scopedTeamIds.has(training.team_id)) {
+      return { success: false as const, error: 'Ocena nie należy do Twojego zakresu odpowiedzialności.' };
     }
 
     return {
