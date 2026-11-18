@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:is(.darktheme *));
 
 @theme inline {
   --color-background: var(--background);
@@ -97,7 +97,7 @@
   --bib: oklch(0.78 0.16 68);
 }
 
-.dark {
+.darktheme {
   --background: oklch(0.16 0.028 158);
   --foreground: oklch(0.96 0.015 145);
   --card: oklch(0.21 0.032 158);
@@ -137,7 +137,6 @@
   --chalk: oklch(0.97 0.015 95);
   --bib: oklch(0.82 0.16 75);
 }
-
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -155,6 +154,33 @@
     background-size: 3px 3px, auto, auto;
     background-attachment: fixed;
   }
+}
+
+.darktheme body {
+  background-image:
+    radial-gradient(oklch(0.96 0.015 145 / 0.025) 0.6px, transparent 0.65px),
+    radial-gradient(ellipse 55% 40% at 100% 0%, oklch(0.42 0.08 75 / 0.12), transparent 60%),
+    radial-gradient(ellipse 40% 30% at 0% 100%, oklch(0.45 0.08 150 / 0.16), transparent 55%);
+}
+
+html.readability-mode {
+  font-size: 150%;
+}
+
+html.readability-mode :not(svg):not(svg *) {
+  font-weight: max(700, var(--tw-font-weight, 400));
+}
+
+html.readability-mode [class~="text-[9px]"] {
+  font-size: 13.5px;
+}
+
+html.readability-mode [class~="text-[10px]"] {
+  font-size: 15px;
+}
+
+html.readability-mode [class~="text-[11px]"] {
+  font-size: 16.5px;
 }
 
 @keyframes step-in {
