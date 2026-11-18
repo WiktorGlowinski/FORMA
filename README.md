@@ -1,6 +1,6 @@
-# 🌓 Experymentalna gałąź, testująca Tryb Ciemny i inne fomrmy Acessability
+# 🌓 Experymentalna gałąź, testująca Tryb Ciemny i inne formy Acessability
 
-Dodane 2 Przyciski w dolnym lewym rodu ekranu, które :
+Dodane 2 Przyciski w dolnym lewym rodu ekranu, którymi są:
 1. Lupa 
 Zwiększa Cały Tekst n a Ekranie o 1.5x wielkości, oraz pogrubia niepogrubiony test, tam gdzie to możliwe... przy czym rpóbuje nie rozwalić całego layoutu.
 2. Tryb Ciemny
