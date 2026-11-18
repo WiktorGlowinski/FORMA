@@ -1,3 +1,15 @@
+# 🌓 Experymentalna gałąź, testująca Tryb Ciemny i inne fomrmy Acessability
+
+Dodane 2 Przyciski w dolnym lewym rodu ekranu, które :
+1. Lupa 
+Zwiększa Cały Tekst n a Ekranie o 1.5x wielkości, oraz pogrubia niepogrubiony test, tam gdzie to możliwe... przy czym rpóbuje nie rozwalić całego layoutu.
+2. Tryb Ciemny
+Ziemnia Wygląd aplikacji na tryb ciemny, który jest użyteczny w nocy a do tego niektórzy użytkownicy wolą dark theme.
+
+#
+
+Poniżej orginalne Readme:
+
 # FORMA — Platforma Zarządzania i Monitorowania Rozwoju Zawodników
 
 **FORMA** to wielozadaniowa, chmurowa platforma klasy SaaS stworzona dla akademii i klubów sportowych. System stawia zawodnika i jego indywidualną ścieżkę rozwoju w centrum uwagi (*player-development centered*), eliminując zbędną biurokrację trenerską na rzecz szybkiej, systematycznej i porównywalnej w czasie oceny postępów po każdym treningu.
