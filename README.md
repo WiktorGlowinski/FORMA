@@ -2,9 +2,14 @@
 
 Dodane 2 Przyciski w dolnym lewym rodu ekranu, którymi są:
 1. Lupa 
-Zwiększa Cały Tekst n a Ekranie o 1.5x wielkości, oraz pogrubia niepogrubiony test, tam gdzie to możliwe... przy czym rpóbuje nie rozwalić całego layoutu.
+Zwiększa Cały Tekst na Ekranie o 1.5x wielkości, oraz pogrubia niepogrubiony test, tam gdzie to możliwe. 
+Do tego próbuje też zachować funkcionalność orginalnego layoutu.
 2. Tryb Ciemny
 Ziemnia Wygląd aplikacji na tryb ciemny, który jest użyteczny w nocy a do tego niektórzy użytkownicy wolą dark theme.
+
+/
+
+Chwilowo testowane tylko na stronie głównej i logowania.
 
 #
 
