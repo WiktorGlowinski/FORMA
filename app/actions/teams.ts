@@ -82,6 +82,7 @@ type CoordinatorTrainingSummary = {
   date: string;
   topic: string | null;
   status: string;
+  plannedRpe: number | null;
   coachName: string;
   evaluatedCount: number;
   expectedCount: number;
@@ -97,6 +98,17 @@ type CoordinatorPlayerSummary = {
   evaluationCount: number;
   attendanceRate: number | null;
   recentScores: string[];
+  history: Array<{ trainingId: string; date: string; score: string | null; present: boolean }>;
+  load: {
+    acute: number | null;
+    chronic: number | null;
+    acwr: number | null;
+    monotony: number | null;
+    strain: number | null;
+    recentFatigue: number | null;
+    fatigueStreak: number;
+    status: 'ready' | 'warning' | 'danger';
+  };
 };
 
 type CoachProcessSummary = {
@@ -188,7 +200,7 @@ export async function getCoordinatorDashboardAction() {
       teamIds.length > 0
         ? supabase
             .from('trainings')
-            .select('id, team_id, date, topic, status, lead_coach_id')
+            .select('id, team_id, date, start_time, end_time, topic, status, lead_coach_id, planned_rpe')
             .in('team_id', teamIds)
             .gte('date', cutoff)
             .lte('date', today)
@@ -268,6 +280,7 @@ export async function getCoordinatorDashboardAction() {
           date: training.date,
           topic: training.topic,
           status: training.status || 'scheduled',
+          plannedRpe: training.planned_rpe,
           coachName,
           evaluatedCount: trainingEvaluations.length,
           expectedCount,
@@ -319,6 +332,56 @@ export async function getCoordinatorDashboardAction() {
           }))
           .sort((a, b) => b.date.localeCompare(a.date));
         const presentHistory = history.filter((evaluation) => evaluation.is_present);
+        const teamTrainingHistory = completedTrainings
+          .slice()
+          .reverse()
+          .map((training) => {
+            const evaluation = history.find((item) => item.training_id === training.id);
+            return {
+              trainingId: training.id,
+              date: training.date,
+              score: evaluation?.score || null,
+              present: evaluation?.is_present === true,
+            };
+          });
+        const trainingById = new Map(teamTrainings.map((training) => [training.id, training]));
+        const playerLoads = (surveysByTraining.size > 0 ? completedTrainings : [])
+          .map((training) => {
+            const survey = (surveysByTraining.get(training.id) || [])
+              .find((item) => item.player_id === player.id && item.is_completed && item.fatigue != null);
+            if (!survey) return null;
+            const source = trainingById.get(training.id);
+            const start = source?.start_time ? Number(source.start_time.slice(0, 2)) * 60 + Number(source.start_time.slice(3, 5)) : null;
+            const end = source?.end_time ? Number(source.end_time.slice(0, 2)) * 60 + Number(source.end_time.slice(3, 5)) : null;
+            const duration = start != null && end != null && end > start ? end - start : 1;
+            return { date: training.date, value: survey.fatigue * duration, fatigue: survey.fatigue };
+          })
+          .filter((item): item is { date: string; value: number; fatigue: number } => item !== null)
+          .sort((a, b) => b.date.localeCompare(a.date));
+        const latestDate = completedTrainings[0]?.date;
+        const daysFromLatest = (date: string) => latestDate
+          ? Math.round((new Date(`${latestDate}T00:00:00`).getTime() - new Date(`${date}T00:00:00`).getTime()) / 86400000)
+          : 999;
+        const acuteValues = playerLoads.filter((item) => daysFromLatest(item.date) >= 0 && daysFromLatest(item.date) < 7);
+        const chronicValues = playerLoads.filter((item) => daysFromLatest(item.date) >= 0 && daysFromLatest(item.date) < 28);
+        const acute = acuteValues.reduce((sum, item) => sum + item.value, 0);
+        const chronic = chronicValues.reduce((sum, item) => sum + item.value, 0) / 4;
+        const dailyLoads = Array.from({ length: 7 }, (_, index) =>
+          acuteValues.filter((item) => daysFromLatest(item.date) === index).reduce((sum, item) => sum + item.value, 0)
+        );
+        const dailyAverage = dailyLoads.reduce((sum, value) => sum + value, 0) / 7;
+        const dailyDeviation = Math.sqrt(dailyLoads.reduce((sum, value) => sum + ((value - dailyAverage) ** 2), 0) / 7);
+        const monotony = dailyDeviation > 0 && acuteValues.length >= 2 ? dailyAverage / dailyDeviation : null;
+        const acwr = chronic > 0 && acuteValues.length >= 2 ? acute / chronic : null;
+        const recentFatigue = playerLoads.length > 0
+          ? Number((playerLoads.slice(0, 3).reduce((sum, item) => sum + item.fatigue, 0) / Math.max(1, playerLoads.slice(0, 3).length)).toFixed(1))
+          : null;
+        let safeStreak = 0;
+        for (const item of playerLoads) {
+          if (item.fatigue < 4) break;
+          safeStreak += 1;
+        }
+        const status = acwr != null && acwr > 1.5 ? 'danger' : acwr != null && acwr > 1.2 ? 'warning' : 'ready';
 
         return {
           id: player.id,
@@ -329,6 +392,17 @@ export async function getCoordinatorDashboardAction() {
             ? Math.round((presentHistory.length / history.length) * 100)
             : null,
           recentScores: presentHistory.slice(0, 3).map((evaluation) => evaluation.score || '—'),
+          history: teamTrainingHistory,
+          load: {
+            acute: acuteValues.length >= 2 ? Math.round(acute) : null,
+            chronic: chronicValues.length >= 2 ? Math.round(chronic) : null,
+            acwr: acwr != null ? Number(acwr.toFixed(2)) : null,
+            monotony: monotony != null ? Number(monotony.toFixed(2)) : null,
+            strain: monotony != null ? Math.round(acute * monotony) : null,
+            recentFatigue,
+            fatigueStreak: safeStreak,
+            status,
+          },
         };
       });
 
@@ -349,6 +423,13 @@ export async function getCoordinatorDashboardAction() {
       });
       const average = (values: Array<number | null>) =>
         values.length > 0 ? Math.round((sum(values) / values.length) * 10) / 10 : null;
+      const loadPlayers = teamPlayers.filter((player) => player.load.acwr != null);
+      const latestTraining = completedTrainings[0];
+      const latestTrainingSurveys = latestTraining ? (surveysByTraining.get(latestTraining.id) || []) : [];
+      const latestRpeValues = latestTrainingSurveys
+        .filter((survey) => survey.is_completed && survey.fatigue != null)
+        .map((survey) => survey.fatigue as number);
+      const actualRpe = latestRpeValues.length > 0 ? Number((sum(latestRpeValues) / latestRpeValues.length).toFixed(1)) : null;
 
       return {
         id: team.id,
@@ -379,6 +460,19 @@ export async function getCoordinatorDashboardAction() {
           averageSatisfaction: average(satisfactionRatings.map((survey) => survey.satisfaction)),
           scoreTotals,
           absenceReasons,
+          load: {
+            averageAcwr: average(loadPlayers.map((player) => player.load.acwr)),
+            maxAcwr: loadPlayers.length > 0 ? Math.max(...loadPlayers.map((player) => player.load.acwr || 0)) : null,
+            averageMonotony: average(teamPlayers.map((player) => player.load.monotony).filter((value): value is number => value != null)),
+            averageStrain: average(teamPlayers.map((player) => player.load.strain).filter((value): value is number => value != null)),
+            highRiskPlayers: teamPlayers.filter((player) => player.load.status !== 'ready').length,
+            highFatiguePlayers: teamPlayers.filter((player) => player.load.fatigueStreak >= 2).length,
+            plannedRpe: latestTraining?.plannedRpe ?? null,
+            actualRpe,
+            rpeDelta: latestTraining?.plannedRpe != null && actualRpe != null
+              ? Number((actualRpe - latestTraining.plannedRpe).toFixed(1))
+              : null,
+          },
         },
         scoreTrend: completedTrainings
           .slice(0, 8)
