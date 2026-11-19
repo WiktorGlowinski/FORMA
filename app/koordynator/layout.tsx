@@ -41,6 +41,7 @@ export default async function CoordinatorLayout({
                     <Link href="/koordynator" className="font-heading text-2xl font-bold uppercase">FORMA · Koordynator</Link>
                     <nav aria-label="Nawigacja koordynatora" className="flex items-center gap-4 text-sm">
                         <Link href="/koordynator" className="font-semibold hover:text-primary">Przegląd klubu</Link>
+                        <Link href="/koordynator/wydarzenia" className="font-semibold hover:text-primary">Wydarzenia</Link>
                         {profile.role !== 'coordinator' && (
                             <Link href="/admin" className="hover:text-primary">Panel administratora</Link>
                         )}

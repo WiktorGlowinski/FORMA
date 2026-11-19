@@ -190,6 +190,28 @@ transcribed from speech in supported browsers or entered manually.
 | `created_at` | `timestamptz` |  |
 | `updated_at` | `timestamptz` |  |
 
+## Table `club_events`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `club_id` | `uuid` | References `clubs.id` |
+| `team_id` | `uuid` | Nullable, references `teams.id` |
+| `created_by` | `uuid` | Nullable, references `profiles.id` |
+| `title` | `text` | Required, 1–120 characters |
+| `event_type` | `text` | `grill`, `trip`, `friendly`, `tournament`, or `other` |
+| `event_date` | `date` | Required |
+| `start_time` | `time` | Nullable |
+| `end_time` | `time` | Nullable |
+| `location` | `text` | Required, up to 200 characters |
+| `opponent_name` | `text` | Nullable |
+| `description` | `text` | Nullable |
+| `status` | `text` | `planned` or `cancelled` |
+| `created_at` | `timestamptz` | Defaults to `now()` |
+| `updated_at` | `timestamptz` | Defaults to `now()` |
+
 ## Table `audit_logs`
 
 ### Columns
@@ -305,6 +327,14 @@ authorizes the administrator and supplies the club ID.
 | `Staff and assigned coaches manage surveys` | ALL | authenticated | PERMISSIVE | `master_admin OR same-club admin/coordinator OR (same club AND is_coach_of_training(training_id))` | Same as USING |
 
 Anonymous table privileges are revoked. Public survey access is performed only through server actions using an individual unguessable survey token; the token is not accepted as a direct table policy predicate.
+
+### `club_events`
+
+Events can be managed by club administrators and coordinators. Coordinators can
+read and update club-wide events and events for teams assigned to their profile;
+team-scoped event creation is restricted to their assigned teams. Apply
+[`supabase/migrations/20261118210000_add_club_events.sql`](../supabase/migrations/20261118210000_add_club_events.sql)
+to add the table and these RLS rules.
 
 ### `audit_logs`
 
