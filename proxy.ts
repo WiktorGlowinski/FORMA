@@ -52,7 +52,7 @@ function withSecurityHeaders(response: NextResponse) {
 }
 
 function isPublicRoute(pathname: string) {
-  const publicRoots = ["/survey", "/ankieta", "/login", "/reset-hasla", "/demo", "/jak-dziala", "/polityka-prywatnosci", "/regulamin", "rodo"];
+  const publicRoots = ["/survey", "/ankieta", "/login", "/reset-hasla", "/demo", "/jak-dziala", "/polityka-prywatnosci", "/regulamin", "/rodo", "/kontakt"];
   return pathname === "/" || publicRoots.some(
     (root) => pathname === root || pathname.startsWith(`${root}/`),
   );
