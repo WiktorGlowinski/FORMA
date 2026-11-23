@@ -114,10 +114,6 @@ export const STARTER_MARKS: Record<string, Record<string, Mark>> = {
   },
 };
 
-export function getTraining(id: string) {
-  return TRAININGS.find((training) => training.id === id);
-}
-
 export function playerName(player: SquadPlayer) {
   return `${player.firstName} ${player.lastName}`;
 }

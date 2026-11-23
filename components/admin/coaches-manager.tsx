@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import Image from "next/image";
 import { 
   Users, 
   UserPlus, 
@@ -299,9 +300,11 @@ export function CoachesManager({
                       title="Kliknij, aby zmienić zdjęcie lub edytować trenera"
                     >
                       {coach.avatarUrl ? (
-                        <img
+                        <Image
                           src={coach.avatarUrl}
                           alt={coach.fullName}
+                          fill
+                          sizes="48px"
                           className="size-full object-cover group-hover/avatar:opacity-60 transition-opacity"
                         />
                       ) : (
@@ -444,7 +447,7 @@ export function CoachesManager({
                   title="Wybierz plik z dysku"
                 >
                   {createAvatar ? (
-                    <img src={createAvatar} alt="Awatar" className="size-full object-cover" />
+                    <Image src={createAvatar} alt="Awatar" fill sizes="64px" className="size-full object-cover" />
                   ) : (
                     <User className="size-7 text-muted-foreground" />
                   )}
@@ -630,7 +633,7 @@ export function CoachesManager({
                   title="Wybierz plik z dysku"
                 >
                   {editAvatar ? (
-                    <img src={editAvatar} alt="Awatar" className="size-full object-cover" />
+                    <Image src={editAvatar} alt="Awatar" fill sizes="64px" className="size-full object-cover" />
                   ) : (
                     <User className="size-7 text-muted-foreground" />
                   )}

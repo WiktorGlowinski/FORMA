@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { changePasswordAction } from "@/app/actions/auth";
+import { changePasswordAction, getSessionContext } from "@/app/actions/auth";
 
 export default function SetPasswordPage() {
   const router = useRouter();
@@ -19,7 +19,13 @@ export default function SetPasswordPage() {
         setError(result.error || "Nie udało się ustawić hasła.");
         return;
       }
-      router.push("/trener");
+      const session = await getSessionContext();
+      const destination =
+        session?.role === "master_admin" ? "/master-admin" :
+        session?.role === "club_admin" || session?.role === "admin" ? "/admin" :
+        session?.role === "coordinator" || session?.role === "koordynator" || session?.role === "analyst" ? "/koordynator" :
+        "/trener";
+      router.push(destination);
       router.refresh();
     });
   }

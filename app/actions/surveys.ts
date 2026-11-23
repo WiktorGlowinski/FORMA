@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { createClient } from '@/lib/supabase-server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { getErrorMessage } from '@/lib/error-message';
+import { canAccessTraining as isAuthorizedSurveyCoach } from '@/lib/training-access';
 
 export interface PublicSurveyInfo {
   trainingDate: string;
@@ -24,13 +25,6 @@ export interface TrainingSurveyInfo {
   }>;
 }
 
-interface SurveyTrainingAuthorization {
-  id: string;
-  club_id: string;
-  team_id: string;
-  lead_coach_id: string | null;
-}
-
 type SurveyPlayerJoin = {
   id: string;
   first_name: string;
@@ -44,32 +38,6 @@ type PendingSurveyRow = {
   expires_at: string | null;
   players: SurveyPlayerJoin | SurveyPlayerJoin[];
 };
-
-async function isAuthorizedSurveyCoach(userId: string, training: SurveyTrainingAuthorization) {
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from('profiles')
-    .select('club_id, role, is_active')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (profileError) throw profileError;
-  if (!profile || profile.is_active === false) return false;
-  if (profile.role === 'master_admin') return true;
-  if (profile.club_id !== training.club_id) return false;
-  if (profile.role === 'club_admin' || profile.role === 'coordinator') return true;
-  if (training.lead_coach_id === userId) return true;
-
-  const { data: assignment, error: assignmentError } = await supabaseAdmin
-    .from('team_coaches')
-    .select('id')
-    .eq('team_id', training.team_id)
-    .eq('coach_id', userId)
-    .is('revoked_at', null)
-    .maybeSingle();
-
-  if (assignmentError) throw assignmentError;
-  return Boolean(assignment);
-}
 
 /**
  * 1. Pobiera dane treningu i listę obecnych zawodników (w tym gości),

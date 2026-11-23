@@ -17,9 +17,29 @@ export async function uploadImageAction(formData: FormData) {
       return { success: false, error: "Brak autoryzacji do przesłania pliku." };
     }
 
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("club_id, role, is_active")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile || profile.is_active === false || !profile.club_id) {
+      return { success: false, error: "Konto nie ma aktywnego klubu." };
+    }
+    if (!["master_admin", "club_admin", "coordinator", "coach"].includes(profile.role)) {
+      return { success: false, error: "Brak uprawnień do przesłania pliku." };
+    }
+
     const file = formData.get("file") as File | null;
-    const bucket = (formData.get("bucket") as UploadBucket) || "avatars";
-    const folder = (formData.get("folder") as string) || "general";
+    const requestedBucket = (formData.get("bucket") as string) || "avatars";
+    const requestedFolder = (formData.get("folder") as string) || "general";
+    if (!["avatars", "club-assets"].includes(requestedBucket)) {
+      return { success: false, error: "Nieprawidłowy magazyn plików." };
+    }
+    const bucket = requestedBucket as UploadBucket;
+    const folder = ["players", "coaches", "logos", "general"].includes(requestedFolder)
+      ? requestedFolder
+      : "general";
 
     if (!file || file.size === 0) {
       return { success: false, error: "Nie wybrano pliku." };
@@ -31,20 +51,24 @@ export async function uploadImageAction(formData: FormData) {
     }
 
     // Pobranie i weryfikacja rozszerzenia pliku
-    const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-    const allowedExts = ["jpg", "jpeg", "png", "webp", "gif", "svg"];
-    if (!allowedExts.includes(ext)) {
-      return { success: false, error: "Niedozwolony format pliku (dozwolone: JPG, PNG, WEBP, SVG)." };
+    const extByMime: Record<string, string> = {
+      "image/jpeg": "jpg",
+      "image/png": "png",
+      "image/webp": "webp",
+    };
+    const ext = extByMime[file.type];
+    if (!ext) {
+      return { success: false, error: "Niedozwolony format pliku (dozwolone: JPG, PNG, WEBP)." };
     }
 
-    const fileName = `${folder}/${randomUUID()}.${ext}`;
+    const fileName = `${profile.club_id}/${folder}/${randomUUID()}.${ext}`;
     const fileBuffer = Buffer.from(await file.arrayBuffer());
 
     const { error: uploadError } = await supabase.storage
       .from(bucket)
       .upload(fileName, fileBuffer, {
         contentType: file.type,
-        upsert: true,
+        upsert: false,
       });
 
     if (uploadError) {

@@ -11,53 +11,6 @@ export interface CsvPlayerRecord {
   primaryPosition?: string;
 }
 
-export async function importPlayersBatch(
-  clubId: string,
-  teamId: string,
-  records: CsvPlayerRecord[]
-) {
-  try {
-    if (!records || records.length === 0) {
-      return { success: false, error: 'Przekazano pustą listę zawodników.' };
-    }
-
-    const supabase = await createClient();
-
-    const rowsToInsert = records.map((p) => {
-      if (!p.firstName?.trim() || !p.lastName?.trim()) {
-        throw new Error('Każdy zawodnik musi posiadać imię i nazwisko.');
-      }
-
-      return {
-        club_id: clubId,
-        current_team_id: teamId,
-        first_name: p.firstName.trim(),
-        last_name: p.lastName.trim(),
-        jersey_number: p.jerseyNumber ? Number(p.jerseyNumber) : null,
-        birth_year: p.birthYear ? Number(p.birthYear) : null,
-        primary_position: p.primaryPosition?.trim() || null,
-        status: 'active',
-      };
-    });
-
-    const { data, error } = await supabase
-      .from('players')
-      .insert(rowsToInsert)
-      .select('id, first_name, last_name, jersey_number');
-
-    if (error) {
-      return { success: false, error: error.message };
-    }
-
-    return { 
-      success: true, 
-      importedCount: data.length, 
-      players: data 
-    };
-  } catch (err: unknown) {
-    return { success: false, error: getErrorMessage(err, 'Nie udało się wykonać operacji.') };
-  }
-}
 export interface CoachPlayerItem {
   id: string;
   firstName: string;
@@ -189,10 +142,21 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
     } = await supabase.auth.getUser();
     if (!user) return { success: false, error: "Brak autoryzacji" };
 
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("club_id, role, is_active")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile || profile.is_active === false) {
+      return { success: false, error: "Brak aktywnego profilu użytkownika" };
+    }
+
     const { data: player, error: pError } = await supabase
       .from("players")
       .select(`
         id,
+        club_id,
         first_name,
         last_name,
         jersey_number,
@@ -210,17 +174,25 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
 
     if (pError || !player) return { success: false, error: "Nie znaleziono zawodnika" };
 
-    // Weryfikacja uprawnień: czy zalogowany trener prowadzi ten zespół
-    const { data: coachAssignment } = await supabase
-      .from("team_coaches")
-      .select("id")
-      .eq("team_id", player.current_team_id)
-      .eq("coach_id", user.id)
-      .is("revoked_at", null)
-      .maybeSingle();
-
-    if (!coachAssignment && user.user_metadata?.role !== "admin") {
+    if (player.club_id !== profile.club_id && profile.role !== "master_admin") {
       return { success: false, error: "Brak uprawnień do kartoteki tego zawodnika" };
+    }
+
+    if (!["master_admin", "club_admin", "coordinator", "coach"].includes(profile.role)) {
+      return { success: false, error: "Brak uprawnień do kartoteki tego zawodnika" };
+    }
+
+    if (profile.role === "coach") {
+      const { data: coachAssignment } = await supabase
+        .from("team_coaches")
+        .select("id")
+        .eq("team_id", player.current_team_id)
+        .eq("coach_id", user.id)
+        .is("revoked_at", null)
+        .maybeSingle();
+      if (!coachAssignment) {
+        return { success: false, error: "Brak uprawnień do kartoteki tego zawodnika" };
+      }
     }
 
     // Pobranie ocen z tabeli evaluations
@@ -362,26 +334,5 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
     };
   } catch (err: unknown) {
     return { success: false, error: getErrorMessage(err, "Błąd pobierania profilu") };
-  }
-}
-
-export async function getTeamPlayersList(teamId: string) {
-  try {
-    const supabase = await createClient();
-
-    const { data, error } = await supabase
-      .from('players')
-      .select('id, first_name, last_name, jersey_number, birth_year, status')
-      .eq('current_team_id', teamId)
-      .order('jersey_number', { ascending: true, nullsFirst: false })
-      .order('last_name', { ascending: true });
-
-    if (error) {
-      return { success: false, error: error.message, players: [] };
-    }
-
-    return { success: true, players: data };
-  } catch (err: unknown) {
-    return { success: false, error: getErrorMessage(err, "Nie udało się pobrać zawodników."), players: [] };
   }
 }

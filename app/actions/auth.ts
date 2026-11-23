@@ -85,33 +85,39 @@ export async function requestPasswordResetAction(formData: FormData) {
 
   const requestHeaders = await headers();
   const referer = requestHeaders.get('referer');
-  const origin = requestHeaders.get('origin') || (referer ? new URL(referer).origin : null);
+  const requestOrigin = requestHeaders.get('origin');
+  let refererOrigin: string | null = null;
+  if (referer) {
+    try {
+      refererOrigin = new URL(referer).origin;
+    } catch {
+      refererOrigin = null;
+    }
+  }
+  const origin = requestOrigin || refererOrigin;
   if (!origin) return { success: false, error: 'Nie udało się ustalić adresu aplikacji.' };
+
+  const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  let allowedOrigin: string;
+  if (configuredAppUrl) {
+    try {
+      allowedOrigin = new URL(configuredAppUrl).origin;
+    } catch {
+      return { success: false, error: 'Konfiguracja adresu aplikacji jest nieprawidłowa.' };
+    }
+    if (origin !== allowedOrigin) {
+      return { success: false, error: 'Nieprawidłowy adres aplikacji.' };
+    }
+  } else {
+    allowedOrigin = origin;
+  }
 
   const supabase = await createClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${origin}/reset-hasla`,
+    redirectTo: `${allowedOrigin}/reset-hasla`,
   });
   if (error) return { success: false, error: 'Nie udało się wysłać wiadomości resetującej.' };
 
-  return { success: true };
-}
-
-export async function resetPasswordAction(formData: FormData) {
-  const password = ((formData.get('password') as string) || '').trim();
-  const confirmation = ((formData.get('confirmation') as string) || '').trim();
-  if (password.length < 6) return { success: false, error: 'Hasło musi mieć co najmniej 6 znaków.' };
-  if (password !== confirmation) return { success: false, error: 'Hasła muszą być identyczne.' };
-
-  const supabase = await createClient();
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) return { success: false, error: 'Link resetujący wygasł. Poproś o nowy.' };
-
-  const { error } = await supabase.auth.updateUser({
-    password,
-    data: { ...user.user_metadata, must_change_password: false },
-  });
-  if (error) return { success: false, error: error.message };
   return { success: true };
 }
 

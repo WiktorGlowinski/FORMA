@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import Image from "next/image";
 import { 
   UserPlus, 
   FileSpreadsheet, 
@@ -16,9 +17,13 @@ import {
   User,
   ArrowRightLeft,
   ArrowUpDown,
+  Edit2,
+  AlertTriangle,
 } from "lucide-react";
 import {
   createPlayerAction,
+  updatePlayerAction,
+  deletePlayerAction,
   transferPlayerToTeamAction,
   updatePlayerAvatarAction,
 } from "@/app/actions/admin";
@@ -114,6 +119,22 @@ export function PlayersManager({
   const [transferTeamId, setTransferTeamId] = useState("");
   const [transferError, setTransferError] = useState<string | null>(null);
   const [isTransferring, setIsTransferring] = useState(false);
+  const [editingPlayer, setEditingPlayer] = useState<PlayerItem | null>(null);
+  const [deletingPlayer, setDeletingPlayer] = useState<PlayerItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [editFirstName, setEditFirstName] = useState("");
+  const [editLastName, setEditLastName] = useState("");
+  const [editJerseyNumber, setEditJerseyNumber] = useState("");
+  const [editBirthYear, setEditBirthYear] = useState("");
+  const [editBirthMonth, setEditBirthMonth] = useState("01");
+  const [editBirthDay, setEditBirthDay] = useState("");
+  const [editTeamId, setEditTeamId] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editParentName, setEditParentName] = useState("");
+  const [editParentPhone, setEditParentPhone] = useState("");
+  const [editParentEmail, setEditParentEmail] = useState("");
+  const [editIsActive, setEditIsActive] = useState(true);
 
   const numericBirthYear = parseInt(birthYear, 10) || currentYear;
   const isJunior = (currentYear - numericBirthYear) < 18;
@@ -337,6 +358,116 @@ export function PlayersManager({
     setIsTransferring(false);
   }
 
+  function openEditDialog(player: PlayerItem) {
+    let month = "01";
+    let day = "";
+    if (player.birth_date) {
+      const parts = player.birth_date.slice(0, 10).split("-");
+      if (parts.length === 3) {
+        month = parts[1];
+        day = parts[2] === "01" ? "" : String(parseInt(parts[2], 10));
+      }
+    }
+
+    setEditingPlayer(player);
+    setEditFirstName(player.first_name);
+    setEditLastName(player.last_name);
+    setEditJerseyNumber(player.jersey_number ? String(player.jersey_number) : "");
+    setEditBirthYear(String(player.birth_year));
+    setEditBirthMonth(month);
+    setEditBirthDay(day);
+    setEditTeamId(player.current_team_id || "");
+    setEditPhone(player.phone || "");
+    setEditEmail(player.email || "");
+    setEditParentName(player.parent_name || "");
+    setEditParentPhone(player.parent_phone || "");
+    setEditParentEmail(player.parent_email || "");
+    setEditIsActive(player.is_active);
+    setErrorMsg(null);
+  }
+
+  async function handleUpdatePlayer(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingPlayer) return;
+
+    setIsSubmitting(true);
+    setErrorMsg(null);
+    const parsedJersey = editJerseyNumber.trim() ? parseInt(editJerseyNumber, 10) : null;
+    const parsedYear = parseInt(editBirthYear, 10) || editingPlayer.birth_year;
+    const dayFormatted = editBirthDay.trim()
+      ? String(parseInt(editBirthDay, 10)).padStart(2, "0")
+      : "01";
+    const birthDate = `${parsedYear}-${editBirthMonth}-${dayFormatted}`;
+    const editIsJunior = (currentYear - parsedYear) < 18;
+
+    const result = await updatePlayerAction({
+      playerId: editingPlayer.id,
+      firstName: editFirstName,
+      lastName: editLastName,
+      jerseyNumber: parsedJersey,
+      birthYear: parsedYear,
+      birthDate,
+      avatarUrl: editingPlayer.avatar_url || undefined,
+      currentTeamId: editTeamId || null,
+      phone: editIsJunior ? undefined : editPhone.trim() || undefined,
+      email: editIsJunior ? undefined : editEmail.trim() || undefined,
+      parentName: editIsJunior ? editParentName.trim() || undefined : undefined,
+      parentPhone: editIsJunior ? editParentPhone.trim() || undefined : undefined,
+      parentEmail: editIsJunior ? editParentEmail.trim() || undefined : undefined,
+      isActive: editIsActive,
+    });
+
+    if (result.success) {
+      const selectedTeam = teams.find((team) => team.id === editTeamId);
+      setPlayers((current) =>
+        current.map((player) =>
+          player.id === editingPlayer.id
+            ? {
+                ...player,
+                first_name: editFirstName.trim(),
+                last_name: editLastName.trim(),
+                jersey_number: parsedJersey,
+                birth_year: parsedYear,
+                birth_date: birthDate,
+                current_team_id: editTeamId || null,
+                teams: selectedTeam ? { id: selectedTeam.id, name: selectedTeam.name } : null,
+                phone: editIsJunior ? null : editPhone.trim() || null,
+                email: editIsJunior ? null : editEmail.trim().toLowerCase() || null,
+                parent_name: editIsJunior ? editParentName.trim() || null : null,
+                parent_phone: editIsJunior ? editParentPhone.trim() || null : null,
+                parent_email: editIsJunior ? editParentEmail.trim().toLowerCase() || null : null,
+                preferred_survey_recipient: editIsJunior ? "parent" : "player",
+                is_active: editIsActive,
+              }
+            : player
+        )
+      );
+      setEditingPlayer(null);
+    } else {
+      setErrorMsg(result.error || "Nie udało się zaktualizować zawodnika.");
+    }
+    setIsSubmitting(false);
+  }
+
+  async function handleDeletePlayer() {
+    if (!deletingPlayer) return;
+    setIsDeleting(true);
+    const result = await deletePlayerAction(deletingPlayer.id);
+    if (result.success) {
+      setPlayers((current) =>
+        current.map((player) =>
+          player.id === deletingPlayer.id
+            ? { ...player, is_active: false, current_team_id: null, teams: null }
+            : player
+        )
+      );
+      setDeletingPlayer(null);
+    } else {
+      alert(result.error || "Nie udało się usunąć zawodnika.");
+    }
+    setIsDeleting(false);
+  }
+
   function formatBirthDateDisplay(year: number, dateStr?: string | null) {
     if (!dateStr) return String(year);
     try {
@@ -482,10 +613,11 @@ export function PlayersManager({
                             title="Kliknij, aby wgrać lub zmienić zdjęcie"
                           >
                             {player.avatar_url ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
+                              <Image
                                 src={player.avatar_url}
                                 alt={`${player.first_name} ${player.last_name}`}
+                                fill
+                                sizes="40px"
                                 className="size-full object-cover group-hover/avatar:opacity-60 transition-opacity"
                               />
                             ) : (
@@ -602,8 +734,28 @@ export function PlayersManager({
                             className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/20 bg-background px-2 py-1 font-heading text-[10px] font-bold uppercase tracking-wide text-foreground transition hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <ArrowRightLeft className="size-3" />
-                            Transferuj
+                            Zmień drużynę
                           </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEditDialog(player)}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-foreground/20 bg-background px-2.5 py-1.5 font-heading text-[10px] font-bold uppercase tracking-wide text-foreground transition hover:border-primary hover:text-primary"
+                            >
+                              <Edit2 className="size-3" />
+                              Edytuj
+                            </button>
+                            {player.is_active && (
+                              <button
+                                type="button"
+                                onClick={() => setDeletingPlayer(player)}
+                                className="inline-flex items-center rounded-lg border border-destructive/30 bg-destructive/5 p-1.5 text-destructive transition hover:bg-destructive/15"
+                                title="Usuń zawodnika"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -697,6 +849,117 @@ export function PlayersManager({
         </div>
       )}
 
+      {editingPlayer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border-2 border-foreground bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)] space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h3 className="font-heading text-2xl uppercase tracking-tight">Edytuj zawodnika</h3>
+              <button type="button" onClick={() => setEditingPlayer(null)} className="rounded-full border p-1 hover:bg-muted">
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs font-mono text-destructive">
+                {errorMsg}
+              </div>
+            )}
+
+            <form onSubmit={handleUpdatePlayer} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Imię</span>
+                  <input required value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm outline-none focus:border-foreground" />
+                </label>
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Nazwisko</span>
+                  <input required value={editLastName} onChange={(e) => setEditLastName(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm outline-none focus:border-foreground" />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Rocznik</span>
+                  <input type="number" required min={1980} max={currentYear} value={editBirthYear} onChange={(e) => setEditBirthYear(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-2.5 font-mono text-sm" />
+                </label>
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Miesiąc</span>
+                  <select value={editBirthMonth} onChange={(e) => setEditBirthMonth(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-2 font-mono text-xs">
+                    {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Dzień</span>
+                  <input type="number" min={1} max={31} value={editBirthDay} onChange={(e) => setEditBirthDay(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-2.5 font-mono text-sm" />
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Nr koszulki</span>
+                  <input type="number" min={1} max={99} value={editJerseyNumber} onChange={(e) => setEditJerseyNumber(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm" />
+                </label>
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Drużyna</span>
+                  <select value={editTeamId} onChange={(e) => setEditTeamId(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm">
+                    <option value="">-- Bez przypisania --</option>
+                    {teams.filter((team) => team.is_active).map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              {(currentYear - (parseInt(editBirthYear, 10) || editingPlayer.birth_year)) < 18 ? (
+                <div className="rounded-xl border-2 border-primary/20 bg-primary/5 p-4 space-y-3">
+                  <span className="font-mono text-xs font-bold uppercase text-primary">Dane opiekuna</span>
+                  <input required placeholder="Imię i nazwisko rodzica" value={editParentName} onChange={(e) => setEditParentName(e.target.value)} className="h-9 w-full rounded-lg border border-foreground/20 bg-card px-2.5 font-mono text-xs" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input required placeholder="Telefon SOS" value={editParentPhone} onChange={(e) => setEditParentPhone(e.target.value)} className="h-9 w-full rounded-lg border border-foreground/20 bg-card px-2.5 font-mono text-xs" />
+                    <input required type="email" placeholder="E-mail rodzica" value={editParentEmail} onChange={(e) => setEditParentEmail(e.target.value)} className="h-9 w-full rounded-lg border border-foreground/20 bg-card px-2.5 font-mono text-xs" />
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <input required placeholder="Telefon zawodnika" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm" />
+                  <input required type="email" placeholder="E-mail zawodnika" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm" />
+                </div>
+              )}
+
+              <label className="flex items-center justify-between rounded-xl border border-foreground/15 p-3">
+                <span className="font-mono text-xs font-bold uppercase">Zawodnik aktywny</span>
+                <input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} className="size-4 accent-primary" />
+              </label>
+
+              <div className="flex gap-2 border-t pt-4">
+                <button type="button" onClick={() => setEditingPlayer(null)} className="h-11 flex-1 rounded-xl border-2 border-foreground/20 font-heading text-xs font-bold uppercase">Anuluj</button>
+                <button type="submit" disabled={isSubmitting} className="h-11 flex-1 rounded-xl border-2 border-foreground bg-primary text-primary-foreground font-heading text-xs font-bold uppercase disabled:opacity-50">
+                  {isSubmitting ? "Zapisywanie..." : "Zapisz zmiany"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deletingPlayer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border-2 border-destructive bg-card p-6 shadow-[5px_5px_0_0_var(--destructive)] space-y-4">
+            <div className="flex items-center gap-3 text-destructive">
+              <AlertTriangle className="size-6" />
+              <h3 className="font-heading text-xl uppercase">Usuń zawodnika</h3>
+            </div>
+            <p className="font-mono text-xs text-muted-foreground">
+              Zawodnik <strong className="text-foreground">{deletingPlayer.first_name} {deletingPlayer.last_name}</strong> zostanie oznaczony jako nieaktywny i odpięty od drużyny. Historia pozostanie zachowana.
+            </p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setDeletingPlayer(null)} disabled={isDeleting} className="h-10 flex-1 rounded-xl border-2 border-foreground/20 font-heading text-xs font-bold uppercase">Anuluj</button>
+              <button type="button" onClick={handleDeletePlayer} disabled={isDeleting} className="h-10 flex-1 rounded-xl border-2 border-destructive bg-destructive text-white font-heading text-xs font-bold uppercase disabled:opacity-50">
+                {isDeleting ? "Usuwanie..." : "Usuń"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL BEZPOŚREDNIEJ EDYCJI ZDJĘCIA GRACZA (PO KLIKNIĘCIU NA GRACZA) */}
       {avatarModalPlayer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
@@ -720,10 +983,11 @@ export function PlayersManager({
                 title="Kliknij, aby wybrać plik"
               >
                 {avatarModalPlayer.avatar_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
+                  <Image
                     src={avatarModalPlayer.avatar_url}
                     alt="Awatar"
+                    fill
+                    sizes="112px"
                     className="size-full object-cover group-hover:opacity-75 transition-opacity"
                   />
                 ) : (
@@ -822,8 +1086,7 @@ export function PlayersManager({
                   className="relative size-16 rounded-full border-2 border-dashed border-foreground/30 bg-muted/40 flex items-center justify-center overflow-hidden cursor-pointer hover:border-foreground shrink-0 transition"
                 >
                   {avatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={avatarUrl} alt="Awatar" className="size-full object-cover" />
+                    <Image src={avatarUrl} alt="Awatar" fill sizes="64px" className="size-full object-cover" />
                   ) : (
                     <User className="size-7 text-muted-foreground" />
                   )}

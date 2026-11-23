@@ -1,8 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { MapPin, Plus } from "lucide-react";
-import { createClubFieldAction } from "@/app/actions/admin";
+import { AlertTriangle, Edit2, MapPin, Plus, Trash2, X } from "lucide-react";
+import {
+  createClubFieldAction,
+  deleteClubFieldAction,
+  updateClubFieldAction,
+} from "@/app/actions/admin";
 
 interface ClubField {
   id: string;
@@ -14,6 +18,64 @@ export function FieldsManager({ initialFields }: { initialFields: ClubField[] })
   const [fields, setFields] = useState(initialFields);
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [editingField, setEditingField] = useState<ClubField | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editIsActive, setEditIsActive] = useState(true);
+  const [deletingField, setDeletingField] = useState<ClubField | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  function openEdit(field: ClubField) {
+    setEditingField(field);
+    setEditName(field.name);
+    setEditIsActive(field.is_active);
+    setActionError(null);
+  }
+
+  async function handleUpdate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingField || !editName.trim() || submitting) return;
+
+    setSubmitting(true);
+    setActionError(null);
+    const result = await updateClubFieldAction(editingField.id, {
+      name: editName,
+      isActive: editIsActive,
+    });
+    if (result.success) {
+      setFields((current) =>
+        current
+          .map((field) =>
+            field.id === editingField.id
+              ? { ...field, name: editName.trim(), is_active: editIsActive }
+              : field
+          )
+          .sort((a, b) => a.name.localeCompare(b.name, "pl"))
+      );
+      setEditingField(null);
+    } else {
+      setActionError(result.error || "Nie udało się zaktualizować boiska.");
+    }
+    setSubmitting(false);
+  }
+
+  async function handleDelete() {
+    if (!deletingField || submitting) return;
+
+    setSubmitting(true);
+    setActionError(null);
+    const result = await deleteClubFieldAction(deletingField.id);
+    if (result.success) {
+      setFields((current) =>
+        current.map((field) =>
+          field.id === deletingField.id ? { ...field, is_active: false } : field
+        )
+      );
+      setDeletingField(null);
+    } else {
+      setActionError(result.error || "Nie udało się usunąć boiska.");
+    }
+    setSubmitting(false);
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -93,12 +155,35 @@ export function FieldsManager({ initialFields }: { initialFields: ClubField[] })
                 <span className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
                   <MapPin className="size-5" />
                 </span>
-                <span className="min-w-0">
+                <span className="min-w-0 flex-1">
                   <span className="block truncate font-heading text-lg font-bold uppercase">{field.name}</span>
                   <span className="font-mono text-[10px] font-bold uppercase text-primary">
                     {field.is_active ? "Dostępne dla trenerów" : "Nieaktywne"}
                   </span>
                 </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => openEdit(field)}
+                    className="inline-flex size-9 items-center justify-center rounded-lg border border-foreground/20 bg-background text-foreground transition hover:border-primary hover:text-primary"
+                    title="Edytuj boisko"
+                  >
+                    <Edit2 className="size-4" />
+                  </button>
+                  {field.is_active && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeletingField(field);
+                        setActionError(null);
+                      }}
+                      className="inline-flex size-9 items-center justify-center rounded-lg border border-destructive/30 bg-destructive/5 text-destructive transition hover:bg-destructive/15"
+                      title="Dezaktywuj boisko"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
@@ -108,6 +193,86 @@ export function FieldsManager({ initialFields }: { initialFields: ClubField[] })
           </p>
         )}
       </section>
+
+      {editingField && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+          <form
+            onSubmit={handleUpdate}
+            className="w-full max-w-md space-y-4 rounded-2xl border-2 border-foreground bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)]"
+          >
+            <div className="flex items-center justify-between border-b pb-3">
+              <h2 className="font-heading text-2xl uppercase">Edytuj boisko</h2>
+              <button type="button" onClick={() => setEditingField(null)} className="rounded-full border p-1 hover:bg-muted">
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {actionError && (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs text-destructive">
+                {actionError}
+              </div>
+            )}
+
+            <label className="block space-y-1.5">
+              <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Nazwa</span>
+              <input
+                type="text"
+                required
+                maxLength={100}
+                value={editName}
+                onChange={(event) => setEditName(event.target.value)}
+                className="h-11 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 text-sm outline-none focus:border-foreground"
+              />
+            </label>
+
+            <label className="flex items-center justify-between rounded-xl border border-foreground/15 p-3">
+              <span className="font-mono text-xs font-bold uppercase">Aktywne boisko</span>
+              <input
+                type="checkbox"
+                checked={editIsActive}
+                onChange={(event) => setEditIsActive(event.target.checked)}
+                className="size-4 accent-primary"
+              />
+            </label>
+
+            <div className="flex gap-2 border-t pt-4">
+              <button type="button" onClick={() => setEditingField(null)} className="h-11 flex-1 rounded-xl border-2 border-foreground/20 font-heading text-xs font-bold uppercase">
+                Anuluj
+              </button>
+              <button type="submit" disabled={submitting || !editName.trim()} className="h-11 flex-1 rounded-xl border-2 border-foreground bg-primary text-primary-foreground font-heading text-xs font-bold uppercase disabled:opacity-50">
+                {submitting ? "Zapisywanie..." : "Zapisz"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {deletingField && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md space-y-4 rounded-2xl border-2 border-destructive bg-card p-6 shadow-[5px_5px_0_0_var(--destructive)]">
+            <div className="flex items-center gap-3 text-destructive">
+              <AlertTriangle className="size-6" />
+              <h2 className="font-heading text-xl uppercase">Usuń boisko</h2>
+            </div>
+            <p className="font-mono text-xs text-muted-foreground">
+              Boisko <strong className="text-foreground">{deletingField.name}</strong> zostanie zdezaktywowane i nie będzie dostępne trenerom. Historia treningów zostanie zachowana.
+            </p>
+            {actionError && (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs text-destructive">
+                {actionError}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setDeletingField(null)} disabled={submitting} className="h-10 flex-1 rounded-xl border-2 border-foreground/20 font-heading text-xs font-bold uppercase">
+                Anuluj
+              </button>
+              <button type="button" onClick={handleDelete} disabled={submitting} className="h-10 flex-1 rounded-xl border-2 border-destructive bg-destructive text-white font-heading text-xs font-bold uppercase disabled:opacity-50">
+                {submitting ? "Usuwanie..." : "Usuń"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

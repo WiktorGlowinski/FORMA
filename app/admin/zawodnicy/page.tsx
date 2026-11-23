@@ -32,9 +32,14 @@ export default async function AdminPlayersPage() {
     last_name: string;
     jersey_number: number | null;
     birth_year: number;
+    birth_date: string | null;
     avatar_url: string | null;
+    phone: string | null;
+    email: string | null;
     parent_name: string | null;
     parent_phone: string | null;
+    parent_email: string | null;
+    preferred_survey_recipient: string | null;
     is_active: boolean;
     current_team_id: string | null;
     teams: { id: string; name: string } | { id: string; name: string }[] | null;
@@ -44,9 +49,14 @@ export default async function AdminPlayersPage() {
     last_name: p.last_name,
     jersey_number: p.jersey_number ?? null,
     birth_year: p.birth_year,
-    avatar_url: p.avatar_url ?? null, // <-- przekazanie zdjęcia z bazy
+    birth_date: p.birth_date ?? null,
+    avatar_url: p.avatar_url ?? null,
+    phone: p.phone ?? null,
+    email: p.email ?? null,
     parent_name: p.parent_name ?? null,
     parent_phone: p.parent_phone ?? null,
+    parent_email: p.parent_email ?? null,
+    preferred_survey_recipient: p.preferred_survey_recipient ?? null,
     is_active: Boolean(p.is_active),
     current_team_id: p.current_team_id ?? null,
     teams: Array.isArray(p.teams)

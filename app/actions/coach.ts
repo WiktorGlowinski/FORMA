@@ -11,6 +11,7 @@ import {
   type InjuryKind,
   type Mark,
 } from "@/components/coach/data";
+import { canManageTraining as canManageTrainingEvaluations, canAccessTraining } from "@/lib/training-access";
 
 type Relation<T> = T | T[] | null;
 
@@ -485,73 +486,6 @@ export async function getCoachFieldsAction(): Promise<{
       fields: [],
     };
   }
-}
-
-async function canManageTrainingEvaluations(
-  userId: string,
-  training: {
-    club_id: string;
-    team_id: string;
-    lead_coach_id: string | null;
-  }
-) {
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from("profiles")
-    .select("club_id, role, is_active")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (profileError) throw profileError;
-  if (!profile || profile.is_active === false) return false;
-  if (profile.role === "master_admin") return true;
-  if (profile.club_id !== training.club_id) return false;
-  if (profile.role === "club_admin" || profile.role === "coordinator") return true;
-  if (training.lead_coach_id === userId) return true;
-  if (training.lead_coach_id !== null) return false;
-
-  const { data: assignment, error: assignmentError } = await supabaseAdmin
-    .from("team_coaches")
-    .select("id")
-    .eq("team_id", training.team_id)
-    .eq("coach_id", userId)
-    .is("revoked_at", null)
-    .maybeSingle();
-
-  if (assignmentError) throw assignmentError;
-  return Boolean(assignment);
-}
-
-async function canAccessTraining(
-  userId: string,
-  training: {
-    club_id: string;
-    team_id: string;
-    lead_coach_id: string | null;
-  }
-) {
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from("profiles")
-    .select("club_id, role, is_active")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (profileError) throw profileError;
-  if (!profile || profile.is_active === false) return false;
-  if (profile.role === "master_admin") return true;
-  if (profile.club_id !== training.club_id) return false;
-  if (profile.role === "club_admin" || profile.role === "coordinator") return true;
-  if (training.lead_coach_id === userId) return true;
-
-  const { data: assignment, error: assignmentError } = await supabaseAdmin
-    .from("team_coaches")
-    .select("id")
-    .eq("team_id", training.team_id)
-    .eq("coach_id", userId)
-    .is("revoked_at", null)
-    .maybeSingle();
-
-  if (assignmentError) throw assignmentError;
-  return Boolean(assignment);
 }
 
 async function getPendingSurveyLinks(trainingId: string) {
@@ -1175,7 +1109,7 @@ export async function savePlayerMarkAction(
           .maybeSingle(),
         supabaseAdmin
           .from("evaluations")
-          .select("player_id")
+          .select("player_id, club_id")
           .eq("training_id", trainingId)
           .eq("club_id", tr.club_id)
           .eq("player_id", playerId)
@@ -1376,6 +1310,7 @@ export async function enableTrainingSurveyAction(trainingId: string) {
       .from("evaluations")
       .select("player_id")
       .eq("training_id", trainingId)
+      .eq("club_id", training.club_id)
       .eq("is_present", true);
 
     if (evErr) throw evErr;
@@ -1383,7 +1318,8 @@ export async function enableTrainingSurveyAction(trainingId: string) {
     const { data: existingSurveys, error: existingError } = await supabaseAdmin
       .from("post_training_surveys")
       .select("player_id")
-      .eq("training_id", trainingId);
+      .eq("training_id", trainingId)
+      .eq("club_id", training.club_id);
     if (existingError) throw existingError;
 
     const existingPlayerIds = new Set((existingSurveys || []).map((survey) => survey.player_id));
@@ -1816,12 +1752,15 @@ export async function addGuestPlayerToTrainingAction(
     }
 
     // Blokada dodania, jeśli to stały zawodnik tej samej drużyny
-    const { data: playerInfo } = await supabase
+    const { data: playerInfo } = await supabaseAdmin
       .from("players")
-      .select("current_team_id")
+      .select("current_team_id, club_id")
       .eq("id", playerId)
       .single();
 
+    if (!playerInfo || playerInfo.club_id !== training.club_id) {
+      return { success: false, error: "Zawodnik nie należy do klubu tej jednostki." };
+    }
     if (playerInfo?.current_team_id === training.team_id) {
       return { success: false, error: "Ten zawodnik jest już w składzie tej drużyny" };
     }
@@ -1879,124 +1818,5 @@ export async function addGuestPlayerToTrainingAction(
     return { success: true, evaluationId: evaluation.id };
   } catch (err: unknown) {
     return { success: false, error: getErrorMessage(err, "Błąd dodawania gościa") };
-  }
-}
-
-/**
- * 11. Pobiera listę ankiet RPE i status wygaśnięcia
- */
-export async function getTrainingSurveysStatusAction(trainingId: string): Promise<{
-  success: boolean;
-  surveys: SurveyStatusItem[];
-  summary?: SurveySummary;
-  shareText?: string;
-  error?: string;
-}> {
-  try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) return { success: false, error: "Brak autoryzacji.", surveys: [] };
-
-    const { data: training } = await supabase
-      .from("trainings")
-      .select("date, topic")
-      .eq("id", trainingId)
-      .single();
-
-    const { data, error } = await supabase
-      .from("post_training_surveys")
-      .select(`
-        id,
-        token,
-        is_completed,
-        fatigue,
-        satisfaction,
-        feedback_note,
-        expires_at,
-        player_id,
-        players!inner ( id, first_name, last_name, jersey_number )
-      `)
-      .eq("training_id", trainingId);
-
-    if (error) throw error;
-
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-
-    let expiresAt: string | null = null;
-    let isExpired = false;
-
-    const surveys: SurveyStatusItem[] = (data || []).map((s: SurveyRow & {
-      id: string;
-      player_id: string;
-      token: string;
-    }) => {
-      if (!expiresAt && s.expires_at) {
-        expiresAt = s.expires_at;
-        if (new Date(s.expires_at) < new Date()) {
-          isExpired = true;
-        }
-      }
-
-      const p = Array.isArray(s.players) ? s.players[0] : s.players;
-      return {
-        id: s.id,
-        playerId: s.player_id,
-        playerName: p ? `${p.first_name} ${p.last_name}` : "Zawodnik",
-        jerseyNumber: p?.jersey_number ?? null,
-        isCompleted: Boolean(s.is_completed),
-        fatigue: s.fatigue,
-        satisfaction: s.satisfaction,
-        feedbackNote: s.feedback_note || null,
-        surveyUrl: `${baseUrl}/ankieta/${s.token}`,
-      };
-    });
-
-    const completedList = surveys.filter((s) => s.isCompleted);
-    const totalCount = surveys.length;
-    const completedCount = completedList.length;
-
-    const avgFatigue = completedCount > 0
-      ? Number((completedList.reduce((acc, cur) => acc + (cur.fatigue || 0), 0) / completedCount).toFixed(1))
-      : null;
-
-    const avgSatisfaction = completedCount > 0
-      ? Number((completedList.reduce((acc, cur) => acc + (cur.satisfaction || 0), 0) / completedCount).toFixed(1))
-      : null;
-
-    const notes = completedList
-      .filter((s) => Boolean(s.feedbackNote))
-      .map((s) => ({
-        playerName: s.playerName,
-        jerseyNumber: s.jerseyNumber,
-        fatigue: s.fatigue || 0,
-        satisfaction: s.satisfaction || 0,
-        feedbackNote: s.feedbackNote!,
-      }));
-
-    const summary: SurveySummary = {
-      isExpired,
-      expiresAt,
-      totalSurveys: totalCount,
-      completedSurveys: completedCount,
-      responseRate: totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0,
-      avgFatigue,
-      avgSatisfaction,
-      notes,
-    };
-
-    const trainingHeader = training?.date 
-      ? ` (${training.date}${training.topic ? ` - ${training.topic}` : ""})` 
-      : "";
-
-    const pendingSurveyLinks = surveys
-      .filter((survey) => !survey.isCompleted)
-      .map((survey) => `${survey.playerName}: ${survey.surveyUrl}`)
-      .join("\n");
-    const shareText = `FORMA — Ankieta potreningowa${trainingHeader}\n${pendingSurveyLinks || "Brak oczekujących ankiet."}\n\nLinki ważne 24h.`;
-
-    return { success: true, surveys, summary, shareText };
-  } catch (err: unknown) {
-    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji."), surveys: [] };
   }
 }

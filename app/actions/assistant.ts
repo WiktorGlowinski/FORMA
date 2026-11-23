@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createPlayerAction, type CsvPlayerRecord } from "@/app/actions/admin";
+import type { CsvPlayerRecord } from "@/app/actions/admin";
 import { createTrainingAction } from "@/app/actions/coach";
 import { createClient } from "@/lib/supabase-server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
@@ -1056,22 +1056,52 @@ export async function confirmAssistantAction(rawProposal: unknown) {
         return { success: false, message: "Drużyna docelowa jest niedostępna. Wygeneruj podgląd ponownie." };
       }
 
-      let createdCount = 0;
-      const errors: string[] = [];
-      for (const player of players) {
-        const result = await createPlayerAction({ ...player, currentTeamId: team.id });
-        if (result.success) createdCount += 1;
-        else errors.push(`${player.firstName} ${player.lastName}: ${result.error || "błąd zapisu"}`);
+      const currentYear = new Date().getFullYear();
+      const rows = players.map((player) => {
+        const isJunior = player.birthYear ? currentYear - player.birthYear < 18 : false;
+        return {
+          club_id: profile.clubId,
+          current_team_id: team.id,
+          first_name: player.firstName.trim(),
+          last_name: player.lastName.trim(),
+          jersey_number: player.jerseyNumber ?? null,
+          birth_year: player.birthYear ?? null,
+          phone: player.phone?.trim() || null,
+          email: player.email?.trim().toLowerCase() || null,
+          parent_name: player.parentName?.trim() || null,
+          parent_phone: player.parentPhone?.trim() || null,
+          parent_email: player.parentEmail?.trim().toLowerCase() || null,
+          preferred_survey_recipient: isJunior ? "parent" : "player",
+          is_active: true,
+        };
+      });
+
+      const { data: created, error: insertError } = await supabaseAdmin
+        .from("players")
+        .insert(rows)
+        .select("id");
+      if (insertError) throw insertError;
+
+      const createdCount = created?.length || 0;
+      if (createdCount > 0) {
+        const historyRows = created.map((player) => ({
+          club_id: profile.clubId,
+          player_id: player.id,
+          team_id: team.id,
+          joined_at: new Date().toISOString(),
+        }));
+        const { error: historyError } = await supabaseAdmin
+          .from("player_team_history")
+          .insert(historyRows);
+        if (historyError) throw historyError;
       }
       if (createdCount > 0) {
         revalidatePath("/admin/zawodnicy");
         revalidatePath("/admin");
       }
       return {
-        success: errors.length === 0,
-        message: errors.length === 0
-          ? `Dodano ${createdCount} zawodników do drużyny ${team.name}.`
-          : `Dodano ${createdCount} z ${players.length} zawodników. Błędy: ${errors.join("; ")}`,
+        success: true,
+        message: `Dodano ${createdCount} zawodników do drużyny ${team.name}.`,
       };
     }
 

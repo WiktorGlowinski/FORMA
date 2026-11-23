@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import Image from "next/image";
 import { 
   Plus, 
   Shield, 
@@ -281,10 +282,11 @@ export function SeasonsManager({
                 className="group relative flex size-24 shrink-0 cursor-pointer items-center justify-center rounded-2xl border-2 border-dashed border-foreground/30 bg-muted/40 transition hover:border-foreground hover:bg-muted overflow-hidden shadow-[2px_2px_0_0_var(--foreground)]"
               >
                 {logoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
+                  <Image
                     src={logoUrl}
                     alt={`Herb ${clubName}`}
+                    fill
+                    sizes="96px"
                     className="size-full object-contain p-2 group-hover:scale-105 transition-transform"
                   />
                 ) : (

@@ -26,7 +26,7 @@ import {
   Ban,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { formatTrainingDate, type Mark } from "@/components/coach/data";
+import { formatTrainingDate } from "@/components/coach/data";
 import {
   getCoachTrainingsAction,
   getCoachFieldsAction,
@@ -41,6 +41,17 @@ import {
 import { useCoachStore } from "@/store/useCoachStore";
 import { cn } from "@/lib/utils";
 import { VoiceTextInput } from "@/components/ui/voice-text-input";
+import {
+  calculateEndTime,
+  canEvaluateTraining,
+  formatDayLabel,
+  getTodayLocalDate,
+  isOfflineEvaluationQueueItem,
+  isValidDateString,
+  normalizeCustomDate,
+  shiftDateByDays,
+  type OfflineEvaluationQueueItem,
+} from "@/components/coach/training-board-utils";
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: "Zaplanowany",
@@ -82,148 +93,6 @@ function formatGuestBadge(count: number): string {
   return `+${count} gości`;
 }
 
-interface OfflineQueueItem {
-  trainingId: string;
-  playerId: string;
-  mark: Mark;
-  note?: string;
-  timestamp: number;
-}
-
-function isOfflineQueueItem(value: unknown): value is OfflineQueueItem {
-  if (!value || typeof value !== "object") return false;
-  const item = value as Partial<OfflineQueueItem>;
-  const mark = item.mark;
-  return (
-    typeof item.trainingId === "string" &&
-    typeof item.playerId === "string" &&
-    typeof item.timestamp === "number" &&
-    Number.isFinite(item.timestamp) &&
-    (item.note === undefined || typeof item.note === "string") &&
-    Boolean(mark) &&
-    (mark?.type === "score" || mark?.type === "absence")
-  );
-}
-
-function getTodayLocalDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function getDaysInMonth(year: number, month: number): number {
-  if (month === 2) {
-    return (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28;
-  }
-
-  return [31, 30, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 31;
-}
-
-function parseISODate(dateStr: string): { year: number; month: number; day: number } | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
-
-  const [year, month, day] = dateStr.split("-").map(Number);
-
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
-  if (month < 1 || month > 12) return null;
-  if (day < 1 || day > getDaysInMonth(year, month)) return null;
-
-  return { year, month, day };
-}
-
-function isValidDateString(dateStr: string): boolean {
-  return !!dateStr && parseISODate(dateStr) !== null;
-}
-
-function normalizeCustomDate(dateStr: string, fallback: string): string {
-  if (!dateStr) return fallback;
-
-  const parsed = parseISODate(dateStr);
-  if (!parsed) return fallback;
-
-  const { year, month, day } = parsed;
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
-
-function shiftDateByDays(dateStr: string, days: number): string {
-  const base = parseISODate(dateStr || getTodayLocalDate());
-  if (!base) return getTodayLocalDate();
-
-  const baseDate = new Date(Date.UTC(base.year, base.month - 1, base.day));
-  baseDate.setUTCDate(baseDate.getUTCDate() + days);
-
-  const year = baseDate.getUTCFullYear();
-  const month = String(baseDate.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(baseDate.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatDayLabel(dateStr: string): string {
-  const parsed = parseISODate(dateStr);
-  if (!parsed) return "";
-
-  const labels = [
-    "niedziela",
-    "poniedziałek",
-    "wtorek",
-    "środa",
-    "czwartek",
-    "piątek",
-    "sobota",
-  ];
-  const monthNames = [
-    "stycznia",
-    "lutego",
-    "marca",
-    "kwietnia",
-    "maja",
-    "czerwca",
-    "lipca",
-    "sierpnia",
-    "września",
-    "października",
-    "listopada",
-    "grudnia",
-  ];
-
-  const y = parsed.year;
-  const m = parsed.month;
-  const d = parsed.day;
-  const adjustedYear = y - Math.floor((14 - m) / 12);
-  const adjustedMonth = m + 12 * Math.floor((14 - m) / 12) - 2;
-  const weekdayIndex =
-    (d + Math.floor((31 * adjustedMonth) / 12) + adjustedYear + Math.floor(adjustedYear / 4) - Math.floor(adjustedYear / 100) + Math.floor(adjustedYear / 400)) % 7;
-
-  return `${labels[(weekdayIndex + 6) % 7]}, ${d} ${monthNames[m - 1]}`;
-}
-
-function calculateEndTime(startH: number, startM: number, durationMinutes: number): string {
-  const total = (startH * 60 + startM + durationMinutes + 1440) % 1440;
-  const endH = String(Math.floor(total / 60)).padStart(2, "0");
-  const endM = String(total % 60).padStart(2, "0");
-  return `${endH}:${endM}`;
-}
-
-function canEvaluateTraining(t: DbTrainingCard, todayStr: string, now: Date): boolean {
-  if (t.status === "completed") return true;
-  if (t.status === "cancelled") return false;
-
-  if (t.status === "scheduled" || t.status === "planned") {
-    if (t.date < todayStr) return true;
-
-    if (t.date === todayStr) {
-      if (!t.startTime) return true;
-      const [h, m] = t.startTime.split(":").map(Number);
-      const trainingMinutes = h * 60 + m;
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      return currentMinutes >= trainingMinutes;
-    }
-  }
-
-  return false;
-}
 
 export function TrainingBoard() {
   const {
@@ -389,10 +258,10 @@ export function TrainingBoard() {
           const rawQueue = localStorage.getItem(key);
           if (!rawQueue) continue;
 
-          let queue: OfflineQueueItem[];
+          let queue: OfflineEvaluationQueueItem[];
           try {
             const parsed: unknown = JSON.parse(rawQueue);
-            if (!Array.isArray(parsed) || !parsed.every(isOfflineQueueItem)) {
+            if (!Array.isArray(parsed) || !parsed.every(isOfflineEvaluationQueueItem)) {
               console.error(`Nieprawidłowa kolejka ocen: ${key}`);
               continue;
             }
@@ -426,11 +295,11 @@ export function TrainingBoard() {
 
           const latestRawQueue = localStorage.getItem(key);
           const parsedLatest: unknown = latestRawQueue ? JSON.parse(latestRawQueue) : [];
-          if (!Array.isArray(parsedLatest) || !parsedLatest.every(isOfflineQueueItem)) {
+          if (!Array.isArray(parsedLatest) || !parsedLatest.every(isOfflineEvaluationQueueItem)) {
             console.error(`Nieprawidłowa kolejka ocen po synchronizacji: ${key}`);
             continue;
           }
-          const latestQueue: OfflineQueueItem[] = parsedLatest;
+          const latestQueue: OfflineEvaluationQueueItem[] = parsedLatest;
           const remaining = latestQueue.filter(
             (item) =>
               !attemptedTimestamps.has(item.timestamp) || failedTimestamps.has(item.timestamp)

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import Image from "next/image";
 import { useCoachStore } from "@/store/useCoachStore";
 import Link from "next/link";
 import {
@@ -60,6 +61,7 @@ import {
 import { AddGuestPlayerModal } from "@/components/coach/add-guest-player-modal";
 import { VoiceTextInput } from "@/components/ui/voice-text-input";
 import { cn } from "@/lib/utils";
+import type { OfflineEvaluationQueueItem } from "@/components/coach/training-board-utils";
 
 const subscribeToShareSupport = () => () => {};
 const getShareSupport = () =>
@@ -73,14 +75,6 @@ export type EvaluationPlayer = SquadPlayer & {
   phone?: string | null;
   isGuest?: boolean;
 };
-
-interface OfflineQueueItem {
-  trainingId: string;
-  playerId: string;
-  mark: Mark;
-  note?: string;
-  timestamp: number;
-}
 
 export function QuickEvaluation({ trainingId }: { trainingId: string }) {
   const {
@@ -151,7 +145,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     }
 
     try {
-      const queue: OfflineQueueItem[] = JSON.parse(rawQueue);
+      const queue: OfflineEvaluationQueueItem[] = JSON.parse(rawQueue);
       if (queue.length === 0) {
         setPendingQueueCount(0);
         setSyncStatus("synced");
@@ -175,7 +169,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       }
 
       const rawLatestQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
-      const latestQueue: OfflineQueueItem[] = rawLatestQueue ? JSON.parse(rawLatestQueue) : [];
+      const latestQueue: OfflineEvaluationQueueItem[] = rawLatestQueue ? JSON.parse(rawLatestQueue) : [];
       const queueToKeep = latestQueue.filter(
         (item) => !attemptedTimestamps.has(item.timestamp) || failedTimestamps.has(item.timestamp)
       );
@@ -267,7 +261,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
       try {
         const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
-        const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
+        const queue: OfflineEvaluationQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
         queuedMarks = queue
           .filter((item) => item.trainingId === trainingId)
           .sort((a, b) => a.timestamp - b.timestamp)
@@ -382,7 +376,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
     } catch {}
 
     // Zapisz oczekującą ocenę przed żądaniem, żeby zamknięcie karty jej nie zgubiło.
-    const queueItem: OfflineQueueItem = {
+    const queueItem: OfflineEvaluationQueueItem = {
       trainingId,
       playerId: player.id,
       mark,
@@ -392,7 +386,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
 
     try {
       const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
-      const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
+      const queue: OfflineEvaluationQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
       queue.push(queueItem);
       localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queue));
       window.dispatchEvent(new Event("forma-evaluation-queue-updated"));
@@ -414,7 +408,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
         throw new Error(res.error || "Błąd zapisu");
       }
       const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
-      const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
+      const queue: OfflineEvaluationQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [];
       const remaining = queue.filter((item) => item.timestamp !== queueItem.timestamp);
       if (remaining.length > 0) {
         localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(remaining));
@@ -428,7 +422,7 @@ export function QuickEvaluation({ trainingId }: { trainingId: string }) {
       console.error("Ocena czeka na synchronizację:", error);
       try {
         const rawQueue = localStorage.getItem(STORAGE_KEY_QUEUE);
-        const queue: OfflineQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [queueItem];
+        const queue: OfflineEvaluationQueueItem[] = rawQueue ? JSON.parse(rawQueue) : [queueItem];
         setPendingQueueCount(queue.length);
         setSyncStatus("offline");
       } catch (storageError) {
@@ -1187,9 +1181,11 @@ function TinderCard({
           <div className="relative size-24 sm:size-28">
             <div className="grid size-full place-items-center rounded-full border-4 border-foreground bg-muted font-heading text-4xl shadow-[3px_3px_0_0_var(--foreground)] overflow-hidden">
               {player.avatarUrl ? (
-                <img
+                <Image
                   src={player.avatarUrl}
                   alt={playerName(player)}
+                  fill
+                  sizes="112px"
                   className="size-full object-cover"
                 />
               ) : (
@@ -1907,9 +1903,11 @@ function Summary({
             <li key={p.id} className="flex items-center justify-between gap-3 p-3">
               <div className="flex items-center gap-2.5 min-w-0">
                 {p.avatarUrl ? (
-                  <img
+                  <Image
                     src={p.avatarUrl}
                     alt={playerName(p)}
+                    width={32}
+                    height={32}
                     className="size-8 rounded-full object-cover border border-foreground/20 shrink-0"
                   />
                 ) : (
