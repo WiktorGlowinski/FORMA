@@ -1,10 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { ArrowRight, ClipboardCheck, MessagesSquare, Users } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
-import { EvalDemo } from "@/components/landing/eval-demo";
-import { NAV } from "@/components/landing/copy";
-import { BallMark, CornerFlag, PitchArt, PitchMark } from "@/components/landing/mark";
+import { SiteFooter } from "@/components/landing/site-footer";
+import { BallMark, CornerFlag, PitchArt } from "@/components/landing/mark";
 import { SiteHeader } from "@/components/landing/site-header";
 import { cn } from "@/lib/utils";
 
@@ -66,7 +66,6 @@ export function PitchHome() {
 
   return (
     <div id="gora" className="relative flex min-h-full flex-1 flex-col">
-      {/* Warstwa dekoracyjna - bezpiecznie przycięta w tle bez psucia scrolla */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <PitchArt className="absolute top-24 -right-[18%] hidden w-[680px] text-foreground/10 lg:block" />
         <BallMark className="absolute top-[38rem] left-[6%] hidden size-16 text-foreground/10 lg:block" />
@@ -80,28 +79,28 @@ export function PitchHome() {
           <div className="relative mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:px-6 sm:py-20 lg:grid-cols-[1.05fr_0.95fr] lg:items-end lg:py-24">
             <div>
               <p className="text-sm font-medium tracking-[0.18em] text-primary uppercase">
-                Ocena po treningu dla klubu
+                Dla klubów piłkarskich i ich zawodników
               </p>
-              <h1 className="mt-4 max-w-xl font-heading text-5xl leading-[0.9] font-semibold tracking-wide text-balance uppercase sm:text-6xl lg:text-7xl">
-                Cały skład w kilka minut. Każdy względem siebie.
+              <h1 className="mt-4 max-w-xl font-heading text-5xl leading-[1.05] font-semibold tracking-wide text-balance uppercase sm:text-6xl lg:text-7xl">
+                Prowadź formę składu. Zostaw każdemu jego własną skalę.
               </h1>
               <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
-                Trener kończy jednostkę i przechodzi zawodnika po zawodniku. Minus oznacza słabiej niż zwykle
-                u tej osoby, plus — powyżej jej poziomu. To nie jest ranking drużyny i nie jest notą sportową
-                na tle rocznika.
+                Forma jest narzędziem dla klubu, który po treningu chce wiedzieć, jak funkcjonował każdy zawodnik,
+                oraz dla zawodnika, który ma być oceniony względem siebie, a nie względem kolegi z drużyny.
+                Trener zamyka jednostkę w kilka minut. Klub dostaje historię. Rodzic dostaje ankietę tylko wtedy,
+                gdy trener ją wyśle.
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-                <a
-                  href="#ocena"
-                  onClick={(e) => scrollToTarget(e, "ocena")}
+                <Link
+                  href="/demo"
                   className={cn(
                     buttonVariants({ size: "lg" }),
-                    "h-12 cursor-pointer px-5 text-base transition-transform hover:-translate-y-0.5 hover:shadow-[4px_4px_0_0_var(--foreground)]",
+                    "h-12 px-5 text-base transition-transform hover:-translate-y-0.5 hover:shadow-[4px_4px_0_0_var(--foreground)]",
                   )}
                 >
                   Wypróbuj szybką ocenę
                   <ArrowRight className="transition-transform group-hover/hero:translate-x-0.5" />
-                </a>
+                </Link>
                 <a
                   href="#skala"
                   onClick={(e) => scrollToTarget(e, "skala")}
@@ -113,17 +112,22 @@ export function PitchHome() {
                   Jak czytać skalę
                 </a>
               </div>
-              <ul className="mt-8 grid gap-3 text-sm sm:grid-cols-3">
-                <li className="print-card rounded-md border-2 border-foreground/15 bg-card px-3 py-3">
-                  Jeden zawodnik na ekranie
-                </li>
-                <li className="print-card rounded-md border-2 border-foreground/15 bg-card px-3 py-3">
-                  Zapis w trakcie, nie na końcu
-                </li>
-                <li className="print-card rounded-md border-2 border-foreground/15 bg-card px-3 py-3">
-                  Nieobecność nie jest minusem
-                </li>
-              </ul>
+              <div className="mt-8 grid gap-3 sm:grid-cols-2">
+                <article className="print-card rounded-md border-2 border-foreground/15 bg-card px-4 py-4">
+                  <h2 className="font-heading text-2xl tracking-tight">Dla klubu</h2>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Akademia, szkółka i zespół seniorski prowadzą tu jeden zapis formy. Trener pracuje na boisku,
+                    koordynator widzi, czy oceny powstają, a skład zostaje w Waszym klubie.
+                  </p>
+                </article>
+                <article className="print-card rounded-md border-2 border-foreground/15 bg-card px-4 py-4">
+                  <h2 className="font-heading text-2xl tracking-tight">Dla zawodnika</h2>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    Plus oznacza, że zagrałeś powyżej siebie. Nie oznacza, że jesteś najlepszy w drużynie.
+                    Ankieta po treningu jest krótka, bez konta, a brak odpowiedzi nie staje się minusem.
+                  </p>
+                </article>
+              </div>
             </div>
 
             <aside className="group/board relative">
@@ -145,11 +149,6 @@ export function PitchHome() {
         </section>
 
         <div className="mx-auto flex max-w-6xl flex-col gap-20 px-4 py-6 sm:px-6 sm:py-10">
-          {/* Gwarantowany wrapper z ID="ocena" i marginesem pod sticky header */}
-          <section id="ocena" className="scroll-mt-24">
-            <EvalDemo />
-          </section>
-
           <section id="skala" className="scroll-mt-24" aria-labelledby="skala-tytul">
             <div className="max-w-2xl">
               <p className="text-sm font-medium tracking-[0.16em] text-primary uppercase">Skala</p>
@@ -307,28 +306,7 @@ export function PitchHome() {
         </div>
       </main>
 
-      <footer className="relative overflow-hidden border-t-2 border-foreground/15">
-        <PitchArt className="pointer-events-none absolute -bottom-16 -left-10 w-[420px] text-foreground/10" />
-        <div className="relative mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 sm:px-6 md:flex-row md:items-end md:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <PitchMark className="size-6 text-primary" />
-              <span className="font-heading text-3xl leading-none">Forma</span>
-            </div>
-            <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-              Strona startowa systemu oceny po treningu. Skala opisuje funkcjonowanie względem własnego
-              poziomu zawodnika. Podgląd oceny nie zapisuje się na serwerze.
-            </p>
-          </div>
-          <nav className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground" aria-label="Stopka">
-            {NAV.map((item) => (
-              <a key={item.href} href={item.href} className="pitch-link">
-                {item.label}
-              </a>
-            ))}
-          </nav>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

@@ -51,11 +51,17 @@ export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
   const isPublicRoute =
-    pathname === "/" ||
-    pathname.startsWith("/survey") ||
-    pathname.startsWith("/ankieta") ||
-    pathname.startsWith("/login") ||
-    pathname.startsWith("/reset-hasla");
+  pathname === "/" ||
+  pathname.startsWith("/survey") ||
+  pathname.startsWith("/ankieta") ||
+  pathname.startsWith("/login") ||
+  pathname.startsWith("/reset-hasla") ||
+  pathname.startsWith("/jak-dziala") ||
+  pathname.startsWith("/kontakt") ||
+  pathname.startsWith("/polityka-prywatnosci") ||
+  pathname.startsWith("/regulamin") ||
+  pathname.startsWith("/rodo") ||
+  pathname.startsWith("/demo");
 
   let response = NextResponse.next({ request: { headers: request.headers } });
 
