@@ -26,17 +26,70 @@ function formatAbsenceShare(
   return `${count}${share}`
 }
 
-export default async function CoordinatorPage() {
+export default async function CoordinatorPage(props: PageProps<'/koordynator'>) {
   await connection()
-  const result = await getCoordinatorDashboardAction()
+  const query = await props.searchParams
+  const attendance: 'present' | 'absent' | undefined =
+    query.attendance === 'present' || query.attendance === 'absent'
+    ? query.attendance
+    : undefined
+  const filters = {
+    startDate: typeof query.start === 'string' ? query.start : undefined,
+    endDate: typeof query.end === 'string' ? query.end : undefined,
+    teamId: typeof query.team === 'string' ? query.team : undefined,
+    playerId: typeof query.player === 'string' ? query.player : undefined,
+    coachId: typeof query.coach === 'string' ? query.coach : undefined,
+    attendance,
+    absenceReason: ['injury', 'sick', 'excused', 'unexcused'].includes(String(query.absence))
+      ? query.absence as 'injury' | 'sick' | 'excused' | 'unexcused'
+      : undefined,
+    score: ['+', '0', '-'].includes(String(query.score))
+      ? query.score as '+' | '0' | '-'
+      : undefined,
+  }
+  const result = await getCoordinatorDashboardAction(filters)
 
   if (!result.success) {
     return (
-      <section className="rounded-2xl border-2 border-red-300 bg-white p-6" role="alert">
-        <h1 className="text-2xl font-bold">Nie można otworzyć panelu koordynatora</h1>
-        <p className="mt-2 text-red-700">{result.error}</p>
-        <Link className="mt-4 inline-block underline" href="/login">Przejdź do logowania</Link>
-      </section>
+      <div className="space-y-6">
+        <header className="border-b-2 border-foreground/15 pb-5">
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Panel koordynatora</p>
+          <h1 className="mt-1 font-heading text-4xl uppercase">Filtry raportu</h1>
+        </header>
+        <form className="grid max-w-2xl gap-4 rounded-2xl border-2 border-foreground/15 bg-card p-5 sm:grid-cols-2">
+          <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+            Okres od
+            <input
+              name="start"
+              type="date"
+              max="9999-12-31"
+              defaultValue={filters.startDate || ''}
+              aria-invalid={result.fieldError === 'startDate'}
+              className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground aria-[invalid=true]:border-destructive"
+            />
+          </label>
+          <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+            Okres do
+            <input
+              name="end"
+              type="date"
+              max="9999-12-31"
+              defaultValue={filters.endDate || ''}
+              aria-invalid={result.fieldError === 'startDate'}
+              className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground aria-[invalid=true]:border-destructive"
+            />
+          </label>
+          <p role="alert" className="sm:col-span-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {result.error}
+          </p>
+          <button type="submit" className="h-10 rounded-lg border-2 border-foreground bg-primary px-5 text-xs font-bold uppercase text-primary-foreground">
+            Zastosuj filtry
+          </button>
+          <Link href="/koordynator" className="inline-flex h-10 items-center justify-center rounded-lg border-2 border-foreground/20 px-5 text-xs font-bold uppercase">
+            Wyczyść
+          </Link>
+        </form>
+      </div>
     )
   }
 
@@ -47,7 +100,9 @@ export default async function CoordinatorPage() {
     <div className="space-y-8 pb-12">
       <header className="flex flex-col gap-4 border-b-2 border-foreground/15 pb-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Panel koordynatora · ostatnie 30 dni</p>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">
+            Panel koordynatora · {formatDate(result.periodStart)}–{formatDate(result.periodEnd)}
+          </p>
           <h1 className="mt-1 font-heading text-4xl uppercase tracking-tight sm:text-5xl">{result.clubName}</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {result.role === 'coordinator'
@@ -58,15 +113,83 @@ export default async function CoordinatorPage() {
         {canManageTeams && <CoordinatorTeamForm />}
       </header>
 
+      <form className="grid gap-3 rounded-2xl border-2 border-foreground/15 bg-card p-4 md:grid-cols-4 xl:grid-cols-7">
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Okres od
+          <input name="start" type="date" max="9999-12-31" defaultValue={filters.startDate || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground" />
+        </label>
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Okres do
+          <input name="end" type="date" max="9999-12-31" defaultValue={filters.endDate || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground" />
+        </label>
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Zespół
+          <select name="team" defaultValue={filters.teamId || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground">
+            <option value="">Wszystkie zespoły</option>
+            {result.filterOptions.teams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Zawodnik
+          <select name="player" defaultValue={filters.playerId || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground">
+            <option value="">Wszyscy zawodnicy</option>
+            {result.filterOptions.players.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Trener
+          <select name="coach" defaultValue={filters.coachId || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground">
+            <option value="">Wszyscy trenerzy</option>
+            {result.filterOptions.coaches.map((coach) => <option key={coach.id} value={coach.id}>{coach.name}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Obecność
+          <select name="attendance" defaultValue={filters.attendance || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground">
+            <option value="">Wszystkie statusy</option>
+            <option value="present">Obecni</option>
+            <option value="absent">Nieobecni</option>
+          </select>
+        </label>
+        <div className="grid grid-cols-2 gap-2 xl:grid-cols-1">
+          <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+            Powód
+            <select name="absence" defaultValue={filters.absenceReason || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-2 text-sm text-foreground">
+              <option value="">Wszystkie</option>
+              <option value="injury">Kontuzja</option>
+              <option value="sick">Choroba</option>
+              <option value="excused">Usprawiedliwiona</option>
+              <option value="unexcused">Nieusprawiedliwiona</option>
+            </select>
+          </label>
+          <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+            Ocena
+            <select name="score" defaultValue={filters.score || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-2 text-sm text-foreground">
+              <option value="">Wszystkie</option>
+              <option value="+">+</option>
+              <option value="0">0</option>
+              <option value="-">−</option>
+            </select>
+          </label>
+        </div>
+        <div className="flex gap-2 md:col-span-4 xl:col-span-7">
+          <button type="submit" className="h-10 rounded-lg border-2 border-foreground bg-primary px-5 text-xs font-bold uppercase text-primary-foreground">Zastosuj filtry</button>
+          <Link href="/koordynator" className="inline-flex h-10 items-center rounded-lg border-2 border-foreground/20 px-5 text-xs font-bold uppercase">Wyczyść</Link>
+        </div>
+      </form>
+
       {teams.length > 0 && (
         <nav aria-label="Przejdź do raportu zespołu" className="flex flex-wrap gap-2">
           {teams.map((team) => (
             <a
               key={team.id}
               href={`#team-${team.id}`}
-              className="rounded-full border border-foreground/20 px-3 py-1.5 text-sm font-semibold underline-offset-2 hover:bg-muted hover:underline"
+              className="inline-flex items-center gap-2 rounded-full border border-foreground/20 bg-card px-3 py-1.5 text-sm font-semibold underline-offset-2 hover:bg-muted hover:underline"
             >
-              {team.name} <span className="text-muted-foreground">{team.ageGroup}</span>
+              <span>{team.name}</span>
+              <span className="rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 font-mono text-xs font-bold text-primary">
+                {team.ageGroup}
+              </span>
             </a>
           ))}
         </nav>
@@ -108,7 +231,7 @@ export default async function CoordinatorPage() {
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-heading text-2xl uppercase">{team.name}</h3>
-                      <span className="rounded-md border border-foreground/20 bg-muted px-2 py-1 font-mono text-xs font-bold">{team.ageGroup}</span>
+                      <span className="rounded-md border border-primary/25 bg-primary/10 px-2 py-1 font-mono text-xs font-bold text-primary">{team.ageGroup}</span>
                       {!team.isActive && <span className="text-xs font-bold text-muted-foreground">Nieaktywny</span>}
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">

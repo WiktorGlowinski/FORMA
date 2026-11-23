@@ -738,6 +738,149 @@ export async function createPlayerAction(payload: {
   }
 }
 
+export async function updatePlayerAction(payload: {
+  playerId: string;
+  firstName: string;
+  lastName: string;
+  jerseyNumber: number | null;
+  birthYear: number;
+  birthDate?: string;
+  avatarUrl?: string;
+  phone?: string;
+  email?: string;
+  parentName?: string;
+  parentPhone?: string;
+  parentEmail?: string;
+  isActive?: boolean;
+}) {
+  try {
+    const { clubId } = await requireAdmin();
+
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("players")
+      .select("id")
+      .eq("id", payload.playerId)
+      .eq("club_id", clubId)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing) return { success: false, error: "Zawodnik nie należy do tego klubu." };
+
+    const currentYear = new Date().getFullYear();
+    const isJunior = (currentYear - payload.birthYear) < 18;
+    if (
+      payload.jerseyNumber !== null &&
+      (!Number.isInteger(payload.jerseyNumber) || payload.jerseyNumber < 1 || payload.jerseyNumber > 99)
+    ) {
+      return { success: false, error: "Numer na koszulce musi być liczbą od 1 do 99." };
+    }
+    if (payload.birthDate) {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(payload.birthDate);
+      if (!match) return { success: false, error: "Niepoprawna data urodzenia." };
+      const [, year, month, day] = match;
+      const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+      if (
+        date.getUTCFullYear() !== Number(year) ||
+        date.getUTCMonth() !== Number(month) - 1 ||
+        date.getUTCDate() !== Number(day)
+      ) {
+        return { success: false, error: "Niepoprawna data urodzenia." };
+      }
+    }
+
+    if (isJunior) {
+      if (!payload.parentName?.trim() || !payload.parentPhone?.trim() || !payload.parentEmail?.trim()) {
+        return {
+          success: false,
+          error: "Dla juniora wymagane jest imię rodzica, numer alarmowy SOS oraz e-mail rodzica.",
+        };
+      }
+    } else if (!payload.phone?.trim() || !payload.email?.trim()) {
+      return {
+        success: false,
+        error: "Dla seniora wymagany jest bezpośredni numer telefonu oraz adres e-mail zawodnika.",
+      };
+    }
+
+    const contactUpdate = isJunior
+      ? {
+          phone: null,
+          email: null,
+          parent_name: payload.parentName?.trim() || null,
+          parent_phone: payload.parentPhone?.trim() || null,
+          parent_email: payload.parentEmail?.trim().toLowerCase() || null,
+        }
+      : {
+          phone: payload.phone?.trim() || null,
+          email: payload.email?.trim().toLowerCase() || null,
+          parent_name: null,
+          parent_phone: null,
+          parent_email: null,
+        };
+
+    const updateData: Record<string, unknown> = {
+      first_name: payload.firstName.trim(),
+      last_name: payload.lastName.trim(),
+      jersey_number: payload.jerseyNumber,
+      birth_year: payload.birthYear,
+      birth_date: payload.birthDate || null,
+      avatar_url: payload.avatarUrl?.trim() || null,
+      preferred_survey_recipient: isJunior ? "parent" : "player",
+      updated_at: new Date().toISOString(),
+      ...contactUpdate,
+    };
+    if (payload.isActive !== undefined) {
+      updateData.is_active = payload.isActive;
+    }
+
+    const { error } = await supabaseAdmin
+      .from("players")
+      .update(updateData)
+      .eq("id", payload.playerId)
+      .eq("club_id", clubId);
+
+    if (error) throw error;
+
+    revalidatePath("/admin/zawodnicy");
+    revalidatePath("/admin");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udało się zaktualizować zawodnika.") };
+  }
+}
+
+export async function deletePlayerAction(playerId: string) {
+  try {
+    const { clubId } = await requireAdmin();
+
+    const { data: player, error: playerError } = await supabaseAdmin
+      .from("players")
+      .select("id")
+      .eq("id", playerId)
+      .eq("club_id", clubId)
+      .maybeSingle();
+    if (playerError) throw playerError;
+    if (!player) return { success: false, error: "Zawodnik nie należy do tego klubu." };
+
+    const { error } = await supabaseAdmin
+      .from("players")
+      .update({
+        is_active: false,
+        current_team_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", playerId)
+      .eq("club_id", clubId);
+    if (error) throw error;
+
+    revalidatePath("/admin/zawodnicy");
+    revalidatePath("/admin/druzyny");
+    revalidatePath("/admin");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udało się usunąć zawodnika.") };
+  }
+}
+
 export async function transferPlayerToTeamAction(playerId: string, teamId: string) {
   try {
     const { clubId } = await requireAdmin();
