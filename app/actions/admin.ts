@@ -608,7 +608,7 @@ export async function assignCoachToTeamAction(payload: {
       .select("id")
       .eq("id", payload.coachId)
       .eq("club_id", clubId)
-      .eq("role", "coach")
+      .in("role", ["coach", "coordinator"])
       .maybeSingle();
 
     if (coachError) throw coachError;
@@ -875,7 +875,6 @@ export async function updatePlayerAction(payload: {
       if (teamError) throw teamError;
       if (!team) return { success: false, error: "Wybrana drużyna nie należy do tego klubu." };
     }
-
     const { data: existing, error: existingError } = await supabaseAdmin
       .from("players")
       .select("id")

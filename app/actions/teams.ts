@@ -107,7 +107,18 @@ type CoachProcessSummary = {
   completionRate: number | null;
 };
 
-export async function getCoordinatorDashboardAction() {
+export type CoordinatorDashboardFilters = {
+  startDate?: string;
+  endDate?: string;
+  teamId?: string;
+  playerId?: string;
+  coachId?: string;
+  attendance?: 'present' | 'absent';
+  absenceReason?: 'injury' | 'sick' | 'excused' | 'unexcused';
+  score?: '+' | '0' | '-';
+};
+
+export async function getCoordinatorDashboardAction(filters: CoordinatorDashboardFilters = {}) {
   try {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -157,7 +168,7 @@ export async function getCoordinatorDashboardAction() {
         .from('profiles')
         .select('id, full_name')
         .eq('club_id', profile.club_id)
-        .eq('role', 'coach')
+        .in('role', ['coach', 'coordinator'])
         .limit(2000),
     ]);
 
@@ -165,17 +176,36 @@ export async function getCoordinatorDashboardAction() {
     if (playersResult.error) throw playersResult.error;
     if (coachesResult.error) throw coachesResult.error;
 
-    const teams = teamsResult.data || [];
+    let teams = teamsResult.data || [];
+    const filterTeamOptions = teams.map((team) => ({ id: team.id, name: team.name }));
     const players = playersResult.data || [];
-    const teamIds = teams.map((team) => team.id);
-    const teamIdSet = new Set(teamIds);
-    const activePlayers = players.filter(
-      (player) => player.current_team_id && teamIdSet.has(player.current_team_id) && player.is_active !== false
-    );
+    let teamIds = teams.map((team) => team.id);
 
     const coachesById = new Map((coachesResult.data || []).map((coach) => [coach.id, coach.full_name || 'Trener']));
     const today = new Date().toISOString().slice(0, 10);
-    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    if (
+      (filters.startDate && !/^\d{4}-\d{2}-\d{2}$/.test(filters.startDate)) ||
+      (filters.endDate && !/^\d{4}-\d{2}-\d{2}$/.test(filters.endDate))
+    ) {
+      return {
+        success: false as const,
+        fieldError: 'startDate' as const,
+        error: 'Podaj poprawną datę w formacie RRRR-MM-DD.',
+      };
+    }
+    const cutoff = filters.startDate && /^\d{4}-\d{2}-\d{2}$/.test(filters.startDate)
+      ? filters.startDate
+      : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const endDate = filters.endDate && /^\d{4}-\d{2}-\d{2}$/.test(filters.endDate)
+      ? filters.endDate
+      : today;
+    if (cutoff > endDate) {
+      return {
+        success: false as const,
+        fieldError: 'startDate' as const,
+        error: 'Data rozpoczęcia nie może być późniejsza niż data zakończenia.',
+      };
+    }
 
     const [assignmentsResult, trainingsResult] = await Promise.all([
       teamIds.length > 0
@@ -191,7 +221,7 @@ export async function getCoordinatorDashboardAction() {
             .select('id, team_id, date, topic, status, lead_coach_id')
             .in('team_id', teamIds)
             .gte('date', cutoff)
-            .lte('date', today)
+            .lte('date', endDate)
             .order('date', { ascending: false })
             .limit(2000)
         : Promise.resolve({ data: [], error: null }),
@@ -200,7 +230,26 @@ export async function getCoordinatorDashboardAction() {
     if (assignmentsResult.error) throw assignmentsResult.error;
     if (trainingsResult.error) throw trainingsResult.error;
 
-    const trainings = trainingsResult.data || [];
+    if (profile.role === 'coordinator') {
+      const assignedTeamIds = new Set(
+        (assignmentsResult.data || [])
+          .filter((assignment) => assignment.coach_id === user.id)
+          .map((assignment) => assignment.team_id)
+      );
+      teams = teams.filter((team) => assignedTeamIds.has(team.id));
+      teamIds = teams.map((team) => team.id);
+    }
+
+    if (filters.teamId) {
+      teams = teams.filter((team) => team.id === filters.teamId);
+      teamIds = teams.map((team) => team.id);
+    }
+
+    const teamIdSet = new Set(teamIds);
+    const activePlayers = players.filter(
+      (player) => player.current_team_id && teamIdSet.has(player.current_team_id) && player.is_active !== false
+    );
+    const trainings = (trainingsResult.data || []).filter((training) => teamIdSet.has(training.team_id));
     const trainingIds = trainings.map((training) => training.id);
     const [evaluationsResult, surveysResult] = await Promise.all([
       trainingIds.length > 0
@@ -225,20 +274,57 @@ export async function getCoordinatorDashboardAction() {
 
     const evaluations = evaluationsResult.data || [];
     const surveys = surveysResult.data || [];
+
+    const filteredEvaluations = evaluations.filter((evaluation) => {
+      if (filters.playerId && evaluation.player_id !== filters.playerId) return false;
+      if (filters.attendance === 'present' && !evaluation.is_present) return false;
+      if (filters.attendance === 'absent' && evaluation.is_present) return false;
+      if (filters.absenceReason && (
+        evaluation.is_present || evaluation.absence_reason !== filters.absenceReason
+      )) return false;
+      if (filters.score && (
+        !evaluation.is_present || evaluation.score !== filters.score
+      )) return false;
+      return true;
+    });
+
+    let selectedPlayerTeamIds: Set<string> | null = null;
+    if (filters.playerId) {
+      const playerTrainingIds = new Set(
+        filteredEvaluations
+          .filter((evaluation) => evaluation.player_id === filters.playerId)
+          .map((evaluation) => evaluation.training_id)
+      );
+      selectedPlayerTeamIds = new Set(
+        trainings
+          .filter((training) => playerTrainingIds.has(training.id))
+          .map((training) => training.team_id)
+      );
+      if (selectedPlayerTeamIds.size === 0) {
+        const selectedPlayer = activePlayers.find((player) => player.id === filters.playerId);
+        if (selectedPlayer?.current_team_id) {
+          selectedPlayerTeamIds = new Set([selectedPlayer.current_team_id]);
+        }
+      }
+    }
+
+    const filteredSurveys = surveys.filter((survey) =>
+      !filters.playerId || survey.player_id === filters.playerId
+    );
     const rosterByTeam = new Map<string, typeof activePlayers>();
     for (const teamId of teamIds) {
       rosterByTeam.set(teamId, activePlayers.filter((player) => player.current_team_id === teamId));
     }
 
-    const evaluationsByTraining = new Map<string, typeof evaluations>();
-    for (const evaluation of evaluations) {
+    const evaluationsByTraining = new Map<string, typeof filteredEvaluations>();
+    for (const evaluation of filteredEvaluations) {
       const current = evaluationsByTraining.get(evaluation.training_id) || [];
       current.push(evaluation);
       evaluationsByTraining.set(evaluation.training_id, current);
     }
 
-    const surveysByTraining = new Map<string, typeof surveys>();
-    for (const survey of surveys) {
+    const surveysByTraining = new Map<string, typeof filteredSurveys>();
+    for (const survey of filteredSurveys) {
       const current = surveysByTraining.get(survey.training_id) || [];
       current.push(survey);
       surveysByTraining.set(survey.training_id, current);
@@ -246,14 +332,21 @@ export async function getCoordinatorDashboardAction() {
 
     const summaries = teams.map((team) => {
       const roster = rosterByTeam.get(team.id) || [];
-      const rosterPlayerIds = new Set(roster.map((player) => player.id));
-      const teamTrainings = trainings.filter((training) => training.team_id === team.id);
+      const filteredRoster = filters.playerId
+        ? roster.filter((player) => player.id === filters.playerId)
+        : roster;
+      const rosterPlayerIds = new Set(filteredRoster.map((player) => player.id));
+      const teamTrainings = trainings.filter((training) =>
+        training.team_id === team.id &&
+        (!selectedPlayerTeamIds || selectedPlayerTeamIds.has(team.id)) &&
+        (!filters.coachId || training.lead_coach_id === filters.coachId)
+      );
       const teamAssignments = (assignmentsResult.data || []).filter((assignment) => assignment.team_id === team.id);
       const teamSummaries: CoordinatorTrainingSummary[] = teamTrainings.map((training) => {
         const trainingEvaluations = (evaluationsByTraining.get(training.id) || [])
           .filter((evaluation) => rosterPlayerIds.has(evaluation.player_id));
         const presentCount = trainingEvaluations.filter((evaluation) => evaluation.is_present).length;
-        const expectedCount = roster.length;
+        const expectedCount = filteredRoster.length;
         const scoreCounts = {
           plus: trainingEvaluations.filter((evaluation) => evaluation.is_present && evaluation.score === '+').length,
           zero: trainingEvaluations.filter((evaluation) => evaluation.is_present && evaluation.score === '0').length,
@@ -281,16 +374,25 @@ export async function getCoordinatorDashboardAction() {
         };
       });
 
-      const completedTrainings = teamSummaries.filter((training) => training.status === 'completed');
+      const completedTrainings = teamSummaries.filter((training) =>
+        training.status === 'completed' &&
+        (
+          !filters.playerId ||
+          filteredEvaluations.some((evaluation) =>
+            evaluation.training_id === training.id &&
+            evaluation.player_id === filters.playerId
+          )
+        )
+      );
       const completedTrainingIds = new Set(completedTrainings.map((training) => training.id));
       const completedEvaluations = completedTrainings.flatMap((training) =>
         (evaluationsByTraining.get(training.id) || [])
           .filter((evaluation) => rosterPlayerIds.has(evaluation.player_id))
       );
       const presentEvaluations = completedEvaluations.filter((evaluation) => evaluation.is_present);
-      const teamSurveys = surveys.filter((survey) => completedTrainingIds.has(survey.training_id));
+      const teamSurveys = filteredSurveys.filter((survey) => completedTrainingIds.has(survey.training_id));
       const completedSurveys = teamSurveys.filter((survey) => survey.is_completed);
-      const expectedEvaluations = completedTrainings.length * roster.length;
+      const expectedEvaluations = completedTrainings.length * filteredRoster.length;
       const completedSurveyRatings = completedSurveys.filter(
         (survey) => survey.fatigue != null || survey.satisfaction != null
       );
@@ -310,8 +412,8 @@ export async function getCoordinatorDashboardAction() {
         unexcused: completedEvaluations.filter((evaluation) => !evaluation.is_present && evaluation.absence_reason === 'unexcused').length,
       };
 
-      const teamPlayers: CoordinatorPlayerSummary[] = roster.map((player) => {
-        const history = evaluations
+      const teamPlayers: CoordinatorPlayerSummary[] = filteredRoster.map((player) => {
+        const history = filteredEvaluations
           .filter((evaluation) => evaluation.player_id === player.id)
           .map((evaluation) => ({
             ...evaluation,
@@ -355,7 +457,7 @@ export async function getCoordinatorDashboardAction() {
         name: team.name,
         ageGroup: team.age_group,
         isActive: team.is_active,
-        playersCount: roster.length,
+        playersCount: filteredRoster.length,
         coaches: coachNames,
         coachProcess,
         trainings: teamSummaries.slice(0, 8),
@@ -402,6 +504,20 @@ export async function getCoordinatorDashboardAction() {
       clubName: club?.name || 'Klub',
       role: profile.role,
       periodStart: cutoff,
+      periodEnd: endDate,
+      scopeTeamCount: summaries.length,
+      filterOptions: {
+        teams: filterTeamOptions,
+        players: activePlayers
+          .map((player) => ({
+            id: player.id,
+            name: `${player.first_name} ${player.last_name}`,
+          })),
+        coaches: (coachesResult.data || []).map((coach) => ({
+          id: coach.id,
+          name: coach.full_name || 'Trener',
+        })),
+      },
       teams: summaries,
       metrics: {
         activeTeams: summaries.filter((team) => team.isActive).length,
@@ -429,7 +545,10 @@ export async function getCoordinatorDashboardAction() {
   }
 }
 
-export async function getCoordinatorPlayerAction(playerId: string) {
+export async function getCoordinatorPlayerAction(
+  playerId: string,
+  filters: { startDate?: string; endDate?: string } = {}
+) {
   try {
     if (!playerId) return { success: false as const, error: 'Nie podano zawodnika.' };
 
@@ -447,6 +566,17 @@ export async function getCoordinatorPlayerAction(playerId: string) {
       return { success: false as const, error: 'Brak uprawnień do profilu zawodnika.' };
     }
 
+    let scopedTeamIds: Set<string> | null = null;
+    if (profile.role === 'coordinator') {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('team_coaches')
+        .select('team_id')
+        .eq('coach_id', user.id)
+        .eq('club_id', profile.club_id);
+      if (assignmentsError) throw assignmentsError;
+      scopedTeamIds = new Set((assignments || []).map((assignment) => assignment.team_id));
+    }
+
     const [playerResult, teamsResult] = await Promise.all([
       supabase
         .from('players')
@@ -462,6 +592,9 @@ export async function getCoordinatorPlayerAction(playerId: string) {
     if (playerResult.error) throw playerResult.error;
     if (teamsResult.error) throw teamsResult.error;
     if (!playerResult.data) return { success: false as const, error: 'Nie znaleziono zawodnika w Twoim klubie.' };
+    if (scopedTeamIds && (!playerResult.data.current_team_id || !scopedTeamIds.has(playerResult.data.current_team_id))) {
+      return { success: false as const, error: 'Zawodnik nie należy do Twojego zakresu odpowiedzialności.' };
+    }
 
     const { data: evaluations, error: evaluationsError } = await supabase
       .from('evaluations')
@@ -501,7 +634,38 @@ export async function getCoordinatorPlayerAction(playerId: string) {
         fatigue: survey?.fatigue ?? null,
         satisfaction: survey?.satisfaction ?? null,
       };
-    }).sort((a, b) => b.date.localeCompare(a.date));
+    }).filter((item) =>
+      (!filters.startDate || item.date >= filters.startDate) &&
+      (!filters.endDate || item.date <= filters.endDate)
+    ).sort((a, b) => b.date.localeCompare(a.date));
+
+    const presentCount = history.filter((item) => item.isPresent).length;
+    const absentCount = history.filter((item) => !item.isPresent).length;
+    const scoreCounts = {
+      plus: history.filter((item) => item.isPresent && item.score === '+').length,
+      zero: history.filter((item) => item.isPresent && item.score === '0').length,
+      minus: history.filter((item) => item.isPresent && item.score === '-').length,
+    };
+    const absenceReasons = {
+      injury: history.filter((item) => !item.isPresent && item.absenceReason === 'injury').length,
+      sick: history.filter((item) => !item.isPresent && item.absenceReason === 'sick').length,
+      excused: history.filter((item) => !item.isPresent && item.absenceReason === 'excused').length,
+      unexcused: history.filter((item) => !item.isPresent && item.absenceReason === 'unexcused').length,
+    };
+    const scoreTotal = scoreCounts.plus + scoreCounts.zero + scoreCounts.minus;
+    const surveyRatings = history.filter((item) => item.surveyCompleted);
+    const fatigueRatings = surveyRatings.map((item) => item.fatigue).filter((value): value is number => value != null);
+    const satisfactionRatings = surveyRatings.map((item) => item.satisfaction).filter((value): value is number => value != null);
+    const average = (values: number[]) =>
+      values.length > 0 ? Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10 : null;
+    const median = (values: number[]) => {
+      if (values.length === 0) return null;
+      const sorted = [...values].sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 1
+        ? sorted[middle]
+        : (sorted[middle - 1] + sorted[middle]) / 2;
+    };
 
     return {
       success: true as const,
@@ -514,6 +678,23 @@ export async function getCoordinatorPlayerAction(playerId: string) {
           : 'Brak przypisanej drużyny',
       },
       history,
+      aggregates: {
+        registeredTrainings: history.length,
+        presentCount,
+        absentCount,
+        attendanceRate: history.length > 0 ? Math.round((presentCount / history.length) * 100) : null,
+        scoreCounts,
+        scoreShares: {
+          plus: scoreTotal > 0 ? Math.round((scoreCounts.plus / scoreTotal) * 100) : null,
+          zero: scoreTotal > 0 ? Math.round((scoreCounts.zero / scoreTotal) * 100) : null,
+          minus: scoreTotal > 0 ? Math.round((scoreCounts.minus / scoreTotal) * 100) : null,
+        },
+        absenceReasons,
+        fatigueAverage: average(fatigueRatings),
+        fatigueMedian: median(fatigueRatings),
+        satisfactionAverage: average(satisfactionRatings),
+        satisfactionMedian: median(satisfactionRatings),
+      },
     };
   } catch (error) {
     return {
@@ -541,6 +722,17 @@ export async function getCoordinatorTrainingAction(trainingId: string) {
       return { success: false as const, error: 'Brak uprawnień do treningu.' };
     }
 
+    let scopedTeamIds: Set<string> | null = null;
+    if (profile.role === 'coordinator') {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('team_coaches')
+        .select('team_id')
+        .eq('coach_id', user.id)
+        .eq('club_id', profile.club_id);
+      if (assignmentsError) throw assignmentsError;
+      scopedTeamIds = new Set((assignments || []).map((assignment) => assignment.team_id));
+    }
+
     const { data: training, error: trainingError } = await supabase
       .from('trainings')
       .select('id, club_id, team_id, date, topic, status, lead_coach_id, teams(id, name, age_group)')
@@ -549,6 +741,9 @@ export async function getCoordinatorTrainingAction(trainingId: string) {
       .maybeSingle();
     if (trainingError) throw trainingError;
     if (!training) return { success: false as const, error: 'Nie znaleziono treningu w Twoim klubie.' };
+    if (scopedTeamIds && !scopedTeamIds.has(training.team_id)) {
+      return { success: false as const, error: 'Trening nie należy do Twojego zakresu odpowiedzialności.' };
+    }
 
     const [playersResult, evaluationsResult, surveysResult, coachResult] = await Promise.all([
       supabase
@@ -645,6 +840,17 @@ export async function getCoordinatorEvaluationAction(evaluationId: string) {
       return { success: false as const, error: 'Brak uprawnień do oceny.' };
     }
 
+    let scopedTeamIds: Set<string> | null = null;
+    if (profile.role === 'coordinator') {
+      const { data: assignments, error: assignmentsError } = await supabase
+        .from('team_coaches')
+        .select('team_id')
+        .eq('coach_id', user.id)
+        .eq('club_id', profile.club_id);
+      if (assignmentsError) throw assignmentsError;
+      scopedTeamIds = new Set((assignments || []).map((assignment) => assignment.team_id));
+    }
+
     const { data: evaluation, error: evaluationError } = await supabase
       .from('evaluations')
       .select(`
@@ -655,7 +861,7 @@ export async function getCoordinatorEvaluationAction(evaluationId: string) {
         is_present,
         absence_reason,
         comment,
-        trainings!inner(id, date, topic, status, club_id, teams(name, age_group)),
+        trainings!inner(id, team_id, date, topic, status, club_id, teams(name, age_group)),
         players!inner(first_name, last_name, jersey_number)
       `)
       .eq('id', evaluationId)
@@ -670,6 +876,9 @@ export async function getCoordinatorEvaluationAction(evaluationId: string) {
     const player = Array.isArray(evaluation.players) ? evaluation.players[0] : evaluation.players;
     if (!training || !player) {
       return { success: false as const, error: 'Brakuje powiązanego treningu lub zawodnika dla tej oceny.' };
+    }
+    if (scopedTeamIds && !scopedTeamIds.has(training.team_id)) {
+      return { success: false as const, error: 'Ocena nie należy do Twojego zakresu odpowiedzialności.' };
     }
 
     return {

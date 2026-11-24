@@ -24,10 +24,16 @@ function absenceLabel(reason: string | null) {
 
 export default async function CoordinatorPlayerPage({
   params,
+  searchParams,
 }: PageProps<'/koordynator/zawodnik/[playerId]'>) {
   await connection()
   const { playerId } = await params
-  const result = await getCoordinatorPlayerAction(playerId)
+  const query = await searchParams
+  const filters = {
+    startDate: typeof query.start === 'string' ? query.start : undefined,
+    endDate: typeof query.end === 'string' ? query.end : undefined,
+  }
+  const result = await getCoordinatorPlayerAction(playerId, filters)
 
   if (!result.success) {
     return (
@@ -38,10 +44,11 @@ export default async function CoordinatorPlayerPage({
     )
   }
 
-  const attendanceCount = result.history.filter((item) => item.isPresent).length
-  const attendanceRate = result.history.length
-    ? Math.round((attendanceCount / result.history.length) * 100)
-    : null
+  const { aggregates } = result
+  const absenceShare = (count: number) =>
+    aggregates.absentCount > 0 ? ` (${Math.round((count / aggregates.absentCount) * 100)}%)` : ''
+  const formatMetric = (value: number | null) => value == null ? 'Brak danych' : `${value}%`
+  const formatAverage = (value: number | null) => value == null ? 'Brak danych' : `${value}/5`
 
   return (
     <div className="space-y-6">
@@ -54,10 +61,48 @@ export default async function CoordinatorPlayerPage({
         </p>
       </header>
 
+      <form className="grid gap-3 rounded-2xl border-2 border-foreground/15 bg-card p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Okres od
+          <input name="start" type="date" max="9999-12-31" defaultValue={filters.startDate || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground" />
+        </label>
+        <label className="space-y-1 text-xs font-bold uppercase text-muted-foreground">
+          Okres do
+          <input name="end" type="date" max="9999-12-31" defaultValue={filters.endDate || ''} className="h-10 w-full rounded-lg border border-foreground/20 bg-background px-3 text-sm text-foreground" />
+        </label>
+        <button type="submit" className="h-10 rounded-lg border-2 border-foreground bg-primary px-4 text-xs font-bold uppercase text-primary-foreground">
+          Zastosuj
+        </button>
+      </form>
+
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric label="Zarejestrowane treningi" value={aggregates.registeredTrainings} />
+        <Metric label="Obecności" value={`${aggregates.presentCount}/${aggregates.registeredTrainings}`} />
+        <Metric label="Nieobecności" value={aggregates.absentCount} />
+        <Metric label="Frekwencja" value={formatMetric(aggregates.attendanceRate)} />
+      </section>
+
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric label="Oceny +" value={`${aggregates.scoreCounts.plus} · ${formatMetric(aggregates.scoreShares.plus)}`} />
+        <Metric label="Oceny 0" value={`${aggregates.scoreCounts.zero} · ${formatMetric(aggregates.scoreShares.zero)}`} />
+        <Metric label="Oceny -" value={`${aggregates.scoreCounts.minus} · ${formatMetric(aggregates.scoreShares.minus)}`} />
+        <Metric label="Średnia zmęczenia" value={formatAverage(aggregates.fatigueAverage)} />
+      </section>
+
       <section className="grid gap-3 sm:grid-cols-3">
-        <Metric label="Zarejestrowane treningi" value={result.history.length} />
-        <Metric label="Obecności" value={`${attendanceCount}/${result.history.length}`} />
-        <Metric label="Frekwencja" value={attendanceRate == null ? 'Brak danych' : `${attendanceRate}%`} />
+        <Metric label="Mediana zmęczenia" value={formatAverage(aggregates.fatigueMedian)} />
+        <Metric label="Średnia zadowolenia" value={formatAverage(aggregates.satisfactionAverage)} />
+        <Metric label="Mediana zadowolenia" value={formatAverage(aggregates.satisfactionMedian)} />
+      </section>
+
+      <section className="rounded-2xl border-2 border-foreground/15 bg-card p-5">
+        <h2 className="font-heading text-2xl uppercase">Powody nieobecności</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Kontuzja {aggregates.absenceReasons.injury}{absenceShare(aggregates.absenceReasons.injury)} ·
+          choroba {aggregates.absenceReasons.sick}{absenceShare(aggregates.absenceReasons.sick)} ·
+          usprawiedliwione {aggregates.absenceReasons.excused}{absenceShare(aggregates.absenceReasons.excused)} ·
+          nieusprawiedliwione {aggregates.absenceReasons.unexcused}{absenceShare(aggregates.absenceReasons.unexcused)}
+        </p>
       </section>
 
       <section className="rounded-2xl border-2 border-foreground/15 bg-card p-5">

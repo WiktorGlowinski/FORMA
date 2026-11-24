@@ -261,7 +261,7 @@ export function CoachesManager({
           className="inline-flex h-11 items-center gap-2 rounded-xl border-2 border-foreground bg-primary px-4 text-xs font-heading uppercase tracking-wider font-black text-primary-foreground transition active:scale-95 shadow-[3px_3px_0_0_var(--foreground)] shrink-0"
         >
           <UserPlus className="size-4 stroke-[3]" />
-          <span>Dodaj członka sztabu</span>
+          <span>Dodaj szkoleniowca</span>
         </button>
       </div>
 
@@ -420,7 +420,7 @@ export function CoachesManager({
                   Kadra Klubu
                 </span>
                 <h3 className="font-heading text-2xl uppercase tracking-tight">
-                  Nowy członek sztabu
+                  Nowy szkoleniowiec
                 </h3>
               </div>
               <button
@@ -588,7 +588,7 @@ export function CoachesManager({
                   disabled={isSubmitting || isUploadingCreateAvatar}
                   className="h-11 w-1/2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50"
                 >
-                  {isSubmitting ? "Tworzenie..." : "Zarejestruj członka sztabu"}
+                  {isSubmitting ? "Tworzenie..." : "Zarejestruj szkoleniowca"}
                 </button>
               </div>
             </form>
