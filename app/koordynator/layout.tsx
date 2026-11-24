@@ -54,7 +54,6 @@ export default async function CoordinatorLayout({
                     </div>
                     <nav aria-label="Nawigacja koordynatora" className="flex flex-wrap items-center gap-1 text-xs font-heading uppercase tracking-wider sm:gap-2">
                         <Link href="/koordynator" className="rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary">Przegląd klubu</Link>
-                        <Link href="/koordynator/wydarzenia" className="rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary">Wydarzenia</Link>
                         {profile.role !== 'coordinator' && (
                             <Link href="/admin" className="rounded-md px-2 py-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary">Panel administratora</Link>
                         )}
