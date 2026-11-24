@@ -14,11 +14,25 @@ export interface DemoPlayer {
 }
 
 export const NAV = [
-  { href: "#ocena", label: "Szybka ocena" },
   { href: "#skala", label: "Skala" },
   { href: "#przebieg", label: "Przebieg" },
   { href: "#role", label: "Dla kogo" },
 ] as const;
+
+export const PAGE_LINKS = [
+  { href: "/jak-dziala", label: "Jak działa?" },
+  { href: "/kontakt", label: "Kontakt" },
+] as const;
+
+export const FOOTER_LINKS = [
+  { href: "/jak-dziala", label: "Jak działa?" },
+  { href: "/kontakt", label: "Kontakt" },
+  { href: "/polityka-prywatnosci", label: "Polityka prywatności" },
+  { href: "/regulamin", label: "Regulamin" },
+  { href: "/rodo", label: "RODO" },
+] as const;
+
+export const CONTACT_EMAIL = "forma-kontakt@outlook.com";
 
 export const ABSENCE_REASONS: { id: AbsenceReason; label: string }[] = [
   { id: "unexcused", label: "Nieusprawiedliwiona" },

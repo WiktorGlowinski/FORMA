@@ -128,6 +128,7 @@ export function PlayersManager({
   const [editBirthYear, setEditBirthYear] = useState("");
   const [editBirthMonth, setEditBirthMonth] = useState("01");
   const [editBirthDay, setEditBirthDay] = useState("");
+  const [editTeamId, setEditTeamId] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editParentName, setEditParentName] = useState("");
@@ -364,7 +365,7 @@ export function PlayersManager({
       const parts = player.birth_date.slice(0, 10).split("-");
       if (parts.length === 3) {
         month = parts[1];
-        day = String(parseInt(parts[2], 10));
+        day = parts[2] === "01" ? "" : String(parseInt(parts[2], 10));
       }
     }
 
@@ -375,6 +376,7 @@ export function PlayersManager({
     setEditBirthYear(String(player.birth_year));
     setEditBirthMonth(month);
     setEditBirthDay(day);
+    setEditTeamId(player.current_team_id || "");
     setEditPhone(player.phone || "");
     setEditEmail(player.email || "");
     setEditParentName(player.parent_name || "");
@@ -392,9 +394,10 @@ export function PlayersManager({
     setErrorMsg(null);
     const parsedJersey = editJerseyNumber.trim() ? parseInt(editJerseyNumber, 10) : null;
     const parsedYear = parseInt(editBirthYear, 10) || editingPlayer.birth_year;
-    const birthDate = editBirthDay.trim()
-      ? `${parsedYear}-${editBirthMonth}-${String(parseInt(editBirthDay, 10)).padStart(2, "0")}`
-      : undefined;
+    const dayFormatted = editBirthDay.trim()
+      ? String(parseInt(editBirthDay, 10)).padStart(2, "0")
+      : "01";
+    const birthDate = `${parsedYear}-${editBirthMonth}-${dayFormatted}`;
     const editIsJunior = (currentYear - parsedYear) < 18;
 
     const result = await updatePlayerAction({
@@ -405,6 +408,7 @@ export function PlayersManager({
       birthYear: parsedYear,
       birthDate,
       avatarUrl: editingPlayer.avatar_url || undefined,
+      currentTeamId: editTeamId || null,
       phone: editIsJunior ? undefined : editPhone.trim() || undefined,
       email: editIsJunior ? undefined : editEmail.trim() || undefined,
       parentName: editIsJunior ? editParentName.trim() || undefined : undefined,
@@ -414,6 +418,7 @@ export function PlayersManager({
     });
 
     if (result.success) {
+      const selectedTeam = teams.find((team) => team.id === editTeamId);
       setPlayers((current) =>
         current.map((player) =>
           player.id === editingPlayer.id
@@ -423,7 +428,9 @@ export function PlayersManager({
                 last_name: editLastName.trim(),
                 jersey_number: parsedJersey,
                 birth_year: parsedYear,
-                birth_date: birthDate ?? null,
+                birth_date: birthDate,
+                current_team_id: editTeamId || null,
+                teams: selectedTeam ? { id: selectedTeam.id, name: selectedTeam.name } : null,
                 phone: editIsJunior ? null : editPhone.trim() || null,
                 email: editIsJunior ? null : editEmail.trim().toLowerCase() || null,
                 parent_name: editIsJunior ? editParentName.trim() || null : null,
@@ -886,21 +893,19 @@ export function PlayersManager({
                   <input type="number" min={1} max={31} value={editBirthDay} onChange={(e) => setEditBirthDay(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-2.5 font-mono text-sm" />
                 </label>
               </div>
-              <p className="-mt-2 text-[11px] text-muted-foreground">
-                Zostaw dzień pusty, jeśli znasz tylko rocznik. Zmiana drużyny jest dostępna przez akcję „Zmień drużynę” na liście.
-              </p>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="space-y-1">
                   <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Nr koszulki</span>
                   <input type="number" min={1} max={99} value={editJerseyNumber} onChange={(e) => setEditJerseyNumber(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm" />
                 </label>
-                <div className="space-y-1">
-                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Aktualna drużyna</span>
-                  <p className="flex h-10 items-center rounded-xl border-2 border-foreground/10 bg-muted px-3 font-mono text-sm">
-                    {editingPlayer.teams?.name || "Bez przypisania"}
-                  </p>
-                </div>
+                <label className="space-y-1">
+                  <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Drużyna</span>
+                  <select value={editTeamId} onChange={(e) => setEditTeamId(e.target.value)} className="h-10 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm">
+                    <option value="">-- Bez przypisania --</option>
+                    {teams.filter((team) => team.is_active).map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                  </select>
+                </label>
               </div>
 
               {(currentYear - (parseInt(editBirthYear, 10) || editingPlayer.birth_year)) < 18 ? (
