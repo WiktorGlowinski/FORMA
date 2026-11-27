@@ -34,6 +34,7 @@ async function requireAdmin() {
   if (
     !profile ||
     profile.is_active === false ||
+    !profile.club_id ||
     (profile.role !== "club_admin" && profile.role !== "master_admin")
   ) {
     throw new Error("Brak uprawnień administratora klubu.");
@@ -451,13 +452,18 @@ export async function updateCoachAction(payload: {
  */
 export async function deleteCoachAction(coachId: string) {
   try {
-    const { clubId } = await requireAdmin();
+    const { user, clubId } = await requireAdmin();
+
+    if (!coachId || coachId === user.id) {
+      return { success: false, error: "Nie można usunąć własnego konta administratora." };
+    }
 
     const { data: coach } = await supabaseAdmin
       .from("profiles")
-      .select("id, club_id")
+      .select("id, club_id, role")
       .eq("id", coachId)
       .eq("club_id", clubId)
+      .in("role", ["coach", "coordinator"])
       .maybeSingle();
 
     if (!coach) {
@@ -533,7 +539,11 @@ export async function createCoachAccountAction(payload: {
     const fullName = payload.fullName.trim();
     const phone = payload.phone?.trim() || null;
     const avatarUrl = payload.avatarUrl?.trim() || null;
-    const role = payload.role || "coach";
+    const requestedRole = payload.role ?? "coach";
+    if (requestedRole !== "coach" && requestedRole !== "coordinator") {
+      return { success: false, error: "Nieprawidłowa rola konta." };
+    }
+    const role = requestedRole;
 
     if (payload.password.length < 6) {
       return { success: false, error: "Hasło musi mieć co najmniej 6 znaków." };
@@ -1064,8 +1074,11 @@ export async function bulkImportPlayersAction(
   try {
     const { clubId } = await requireAdmin();
 
-    if (!records || records.length === 0) {
+    if (!Array.isArray(records) || records.length === 0) {
       return { success: false, error: "Brak danych do zaimportowania." };
+    }
+    if (records.length > 500) {
+      return { success: false, error: "Jednorazowo można zaimportować maksymalnie 500 zawodników." };
     }
 
     if (teamId) {
@@ -1081,6 +1094,24 @@ export async function bulkImportPlayersAction(
     }
 
     const currentYear = new Date().getFullYear();
+
+    for (const p of records) {
+      const firstName = typeof p.firstName === "string" ? p.firstName.trim() : "";
+      const lastName = typeof p.lastName === "string" ? p.lastName.trim() : "";
+      if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100) {
+        return { success: false, error: "Każdy zawodnik musi mieć poprawne imię i nazwisko." };
+      }
+      if (!Number.isInteger(p.birthYear) || p.birthYear < 1940 || p.birthYear > currentYear) {
+        return { success: false, error: `Nieprawidłowy rocznik dla zawodnika ${firstName} ${lastName}.` };
+      }
+      if (
+        p.jerseyNumber !== null &&
+        p.jerseyNumber !== undefined &&
+        (!Number.isInteger(p.jerseyNumber) || p.jerseyNumber < 1 || p.jerseyNumber > 99)
+      ) {
+        return { success: false, error: `Nieprawidłowy numer na koszulce dla zawodnika ${firstName} ${lastName}.` };
+      }
+    }
 
     const insertPayload = records.map((p) => {
       const isJunior = (currentYear - p.birthYear) < 18;

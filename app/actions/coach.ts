@@ -12,6 +12,7 @@ import {
   type Mark,
 } from "@/components/coach/data";
 import { canManageTraining as canManageTrainingEvaluations, canAccessTraining } from "@/lib/training-access";
+import { getActiveStaff } from "@/lib/access";
 
 type Relation<T> = T | T[] | null;
 
@@ -194,6 +195,14 @@ export interface CoachAnalyticsData {
   }>;
 }
 
+function escapeLikeTerm(value: string) {
+  return value
+    .replace(/[\\%_]/g, "\\$&")
+    .replace(/[(),]/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message;
   if (
@@ -213,9 +222,10 @@ export async function getCoachAnalyticsAction(): Promise<{
   error?: string;
 }> {
   try {
+    const staff = await getActiveStaff();
+    if (!staff) return { success: false, error: "Brak autoryzacji." };
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return { success: false, error: "Brak autoryzacji." };
+    const user = staff.user;
 
     const { data: assignments, error: assignmentError } = await supabase
       .from("team_coaches")
@@ -524,12 +534,12 @@ export interface GuestCandidatePlayer {
  */
 export async function getCoachTrainingsAction() {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
+    const staff = await getActiveStaff();
+    if (!staff) {
       return { success: false, error: "Brak aktywnej sesji użytkownika.", trainings: [], teams: [] };
     }
+    const supabase = await createClient();
+    const user = staff.user;
 
     const { data: assignments, error: assignErr } = await supabase
       .from("team_coaches")
@@ -714,18 +724,19 @@ export async function createTrainingAction(payload: {
       return { success: false, error: "Data treningu jest nieprawidłowa." };
     }
 
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
+    const staff = await getActiveStaff();
+    if (!staff) {
       return { success: false, error: "Brak aktywnej sesji trenera." };
     }
+    const supabase = await createClient();
+    const user = staff.user;
 
     const { data: assignment } = await supabase
       .from("team_coaches")
       .select("id")
       .eq("team_id", payload.teamId)
       .eq("coach_id", user.id)
+      .is("revoked_at", null)
       .maybeSingle();
 
     if (!assignment) {
@@ -1376,10 +1387,10 @@ export async function getCoachAlertsAction(): Promise<{
   error?: string;
 }> {
   try {
+    const staff = await getActiveStaff();
+    if (!staff) return { success: false, error: "Brak autoryzacji" };
     const supabase = await createClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return { success: false, error: "Brak autoryzacji" };
+    const user = staff.user;
 
     const { data: coachTeams, error: ctError } = await supabase
       .from("team_coaches")
@@ -1530,14 +1541,14 @@ export async function cancelTrainingAction(
   reason?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    const staff = await getActiveStaff();
+    if (!staff) return { success: false, error: "Brak autoryzacji" };
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) return { success: false, error: "Brak autoryzacji" };
+    const user = staff.user;
 
     const { data: training, error: fetchError } = await supabase
       .from("trainings")
-      .select("id, status, team_id, lead_coach_id, organizational_note")
+      .select("id, club_id, status, team_id, lead_coach_id, organizational_note")
       .eq("id", trainingId)
       .single();
 
@@ -1549,18 +1560,7 @@ export async function cancelTrainingAction(
       return { success: false, error: "Nie można odwołać zrealizowanego i zamkniętego treningu" };
     }
 
-    const { data: assignment } = await supabase
-      .from("team_coaches")
-      .select("id")
-      .eq("team_id", training.team_id)
-      .eq("coach_id", user.id)
-      .is("revoked_at", null)
-      .maybeSingle();
-
-    const isAuthorized =
-      training.lead_coach_id === user.id ||
-      Boolean(assignment) ||
-      user.user_metadata?.role === "admin";
+    const isAuthorized = await canManageTrainingEvaluations(user.id, training);
 
     if (!isAuthorized) {
       return { success: false, error: "Brak uprawnień do odwołania tej jednostki" };
@@ -1603,19 +1603,23 @@ export async function searchClubPlayersForGuestAction(
   error?: string;
 }> {
   try {
+    const staff = await getActiveStaff();
+    if (!staff) return { success: false, error: "Brak autoryzacji" };
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) return { success: false, error: "Brak autoryzacji" };
+    const user = staff.user;
 
     const { data: training, error: tError } = await supabase
       .from("trainings")
-      .select("id, club_id, team_id")
+      .select("id, club_id, team_id, lead_coach_id")
       .eq("id", trainingId)
       .single();
 
     if (tError || !training) {
       return { success: false, error: "Jednostka treningowa nie istnieje" };
+    }
+
+    if (!(await canAccessTraining(user.id, training))) {
+      return { success: false, error: "Brak uprawnień do jednostki treningowej" };
     }
 
     let targetClubId = training.club_id;
@@ -1672,10 +1676,10 @@ export async function searchClubPlayersForGuestAction(
       dbQuery = dbQuery.not("id", "in", `(${excludedIds.join(",")})`);
     }
 
-    const trimmedQuery = query.trim();
-    if (trimmedQuery.length > 0) {
+    const safeQuery = escapeLikeTerm(query);
+    if (safeQuery.length > 0) {
       dbQuery = dbQuery.or(
-        `first_name.ilike.%${trimmedQuery}%,last_name.ilike.%${trimmedQuery}%`
+        `first_name.ilike.%${safeQuery}%,last_name.ilike.%${safeQuery}%`
       );
     }
 
@@ -1720,10 +1724,10 @@ export async function addGuestPlayerToTrainingAction(
   error?: string;
 }> {
   try {
+    const staff = await getActiveStaff();
+    if (!staff) return { success: false, error: "Brak autoryzacji" };
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) return { success: false, error: "Brak autoryzacji" };
+    const user = staff.user;
 
     const { data: training, error: tError } = await supabase
       .from("trainings")

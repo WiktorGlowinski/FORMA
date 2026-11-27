@@ -951,12 +951,39 @@ async function planPlayerCreation(profile: AssistantProfile, data: Record<string
   };
 }
 
+const ASSISTANT_RATE_WINDOW_MS = 60_000;
+const ASSISTANT_RATE_MAX_REQUESTS = 20;
+const assistantRateLimit = new Map<string, number[]>();
+
+function isAssistantRateLimited(userId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - ASSISTANT_RATE_WINDOW_MS;
+  const timestamps = (assistantRateLimit.get(userId) || []).filter((ts) => ts > cutoff);
+  if (timestamps.length >= ASSISTANT_RATE_MAX_REQUESTS) {
+    assistantRateLimit.set(userId, timestamps);
+    return true;
+  }
+  timestamps.push(now);
+  assistantRateLimit.set(userId, timestamps);
+  if (assistantRateLimit.size > 1000) {
+    for (const [key, list] of assistantRateLimit.entries()) {
+      const fresh = list.filter((ts) => ts > cutoff);
+      if (fresh.length === 0) assistantRateLimit.delete(key);
+      else assistantRateLimit.set(key, fresh);
+    }
+  }
+  return false;
+}
+
 export async function runAssistantAction(
   rawMessage: string,
   rawHistory: unknown
 ): Promise<{ success: boolean; data?: AssistantReply; error?: string }> {
   try {
     const profile = await getAssistantProfile();
+    if (isAssistantRateLimited(profile.userId)) {
+      return { success: false, error: "Zbyt wiele zapytań do asystenta. Odczekaj chwilę i spróbuj ponownie." };
+    }
     const message = rawMessage.trim();
     if (!message || message.length > 3000) {
       return { success: false, error: "Wpisz polecenie do 3000 znaków." };

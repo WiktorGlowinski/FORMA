@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase-server';
 import { getErrorMessage } from '@/lib/error-message';
+import { getActiveStaff } from '@/lib/access';
 
 export interface CsvPlayerRecord {
   firstName: string;
@@ -56,12 +57,10 @@ export async function getCoachRosterAction(): Promise<{
   error?: string;
 }> {
   try {
+    const staff = await getActiveStaff();
+    if (!staff) return { success: false, error: "Brak autoryzacji" };
     const supabase = await createClient();
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { success: false, error: "Brak autoryzacji" };
+    const user = staff.user;
 
     // Pobieramy aktywne przypisania trenera (zarówno is_primary = true jak i false)
     const { data: coachTeams, error: ctError } = await supabase
@@ -135,12 +134,10 @@ export async function getPlayerAnalyticsAction(playerId: string): Promise<{
   error?: string;
 }> {
   try {
+    const staff = await getActiveStaff();
+    if (!staff) return { success: false, error: "Brak autoryzacji" };
     const supabase = await createClient();
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { success: false, error: "Brak autoryzacji" };
+    const user = staff.user;
 
     const { data: profile, error: profileError } = await supabase
       .from("profiles")

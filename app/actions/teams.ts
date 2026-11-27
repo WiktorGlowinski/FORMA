@@ -24,7 +24,7 @@ export async function createCoordinatorTeamAction(payload: { name: string; ageGr
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('club_id, role')
+      .select('club_id, role, is_active')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -34,6 +34,7 @@ export async function createCoordinatorTeamAction(payload: { name: string; ageGr
 
     if (
       !profile ||
+      profile.is_active === false ||
       (profile.role !== 'club_admin' && profile.role !== 'master_admin') ||
       !profile.club_id
     ) {
@@ -118,7 +119,7 @@ export async function getCoordinatorDashboardAction() {
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('club_id, role')
+      .select('club_id, role, is_active')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -127,7 +128,7 @@ export async function getCoordinatorDashboardAction() {
     }
 
     const permittedRoles = ['coordinator', 'club_admin', 'master_admin'];
-    if (!profile || !permittedRoles.includes(profile.role) || !profile.club_id) {
+    if (!profile || profile.is_active === false || !permittedRoles.includes(profile.role) || !profile.club_id) {
       return {
         success: false as const,
         error: 'To konto nie ma przypisanego klubu ani uprawnień do panelu koordynatora.',
@@ -439,11 +440,11 @@ export async function getCoordinatorPlayerAction(playerId: string) {
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('club_id, role')
+      .select('club_id, role, is_active')
       .eq('id', user.id)
       .maybeSingle();
     if (profileError) throw profileError;
-    if (!profile?.club_id || !['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
+    if (!profile?.club_id || profile.is_active === false || !['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
       return { success: false as const, error: 'Brak uprawnień do profilu zawodnika.' };
     }
 
@@ -533,11 +534,11 @@ export async function getCoordinatorTrainingAction(trainingId: string) {
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('club_id, role')
+      .select('club_id, role, is_active')
       .eq('id', user.id)
       .maybeSingle();
     if (profileError) throw profileError;
-    if (!profile?.club_id || !['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
+    if (!profile?.club_id || profile.is_active === false || !['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
       return { success: false as const, error: 'Brak uprawnień do treningu.' };
     }
 
@@ -637,11 +638,11 @@ export async function getCoordinatorEvaluationAction(evaluationId: string) {
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('club_id, role')
+      .select('club_id, role, is_active')
       .eq('id', user.id)
       .maybeSingle();
     if (profileError) throw profileError;
-    if (!profile?.club_id || !['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
+    if (!profile?.club_id || profile.is_active === false || !['coordinator', 'club_admin', 'master_admin'].includes(profile.role)) {
       return { success: false as const, error: 'Brak uprawnień do oceny.' };
     }
 
