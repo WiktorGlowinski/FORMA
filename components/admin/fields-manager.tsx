@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Edit2, MapPin, Plus, Trash2, X } from "lucide-react";
+import { Edit2, MapPin, Plus, Trash2, X } from "lucide-react";
 import {
   createClubFieldAction,
   deleteClubFieldAction,
   updateClubFieldAction,
 } from "@/app/actions/admin";
+import { DeleteConfirmation } from "@/components/admin/delete-confirmation";
 
 interface ClubField {
   id: string;
@@ -63,18 +64,25 @@ export function FieldsManager({ initialFields }: { initialFields: ClubField[] })
 
     setSubmitting(true);
     setActionError(null);
-    const result = await deleteClubFieldAction(deletingField.id);
-    if (result.success) {
-      setFields((current) =>
-        current.map((field) =>
-          field.id === deletingField.id ? { ...field, is_active: false } : field
-        )
+    try {
+      const result = await deleteClubFieldAction(deletingField.id);
+      if (result.success) {
+        setFields((current) =>
+          current.map((field) =>
+            field.id === deletingField.id ? { ...field, is_active: false } : field
+          )
+        );
+        setDeletingField(null);
+      } else {
+        setActionError(result.error || "Nie udało się usunąć boiska.");
+      }
+    } catch (error: unknown) {
+      setActionError(
+        error instanceof Error ? error.message : "Nie udało się usunąć boiska."
       );
-      setDeletingField(null);
-    } else {
-      setActionError(result.error || "Nie udało się usunąć boiska.");
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -140,7 +148,6 @@ export function FieldsManager({ initialFields }: { initialFields: ClubField[] })
           {submitting ? "Dodaję..." : "Dodaj boisko"}
         </button>
       </form>
-
       <section className="space-y-3">
         <h2 className="px-1 font-mono text-xs font-bold uppercase tracking-wider text-muted-foreground">
           Boiska w klubie ({fields.length})
@@ -248,30 +255,18 @@ export function FieldsManager({ initialFields }: { initialFields: ClubField[] })
       )}
 
       {deletingField && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md space-y-4 rounded-2xl border-2 border-destructive bg-card p-6 shadow-[5px_5px_0_0_var(--destructive)]">
-            <div className="flex items-center gap-3 text-destructive">
-              <AlertTriangle className="size-6" />
-              <h2 className="font-heading text-xl uppercase">Usuń boisko</h2>
-            </div>
-            <p className="font-mono text-xs text-muted-foreground">
+        <DeleteConfirmation
+          title="Usuń boisko"
+          description={(
+            <p>
               Boisko <strong className="text-foreground">{deletingField.name}</strong> zostanie zdezaktywowane i nie będzie dostępne trenerom. Historia treningów zostanie zachowana.
             </p>
-            {actionError && (
-              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs text-destructive">
-                {actionError}
-              </div>
-            )}
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setDeletingField(null)} disabled={submitting} className="h-10 flex-1 rounded-xl border-2 border-foreground/20 font-heading text-xs font-bold uppercase">
-                Anuluj
-              </button>
-              <button type="button" onClick={handleDelete} disabled={submitting} className="h-10 flex-1 rounded-xl border-2 border-destructive bg-destructive text-white font-heading text-xs font-bold uppercase disabled:opacity-50">
-                {submitting ? "Usuwanie..." : "Usuń"}
-              </button>
-            </div>
-          </div>
-        </div>
+          )}
+          error={actionError}
+          isProcessing={submitting}
+          onCancel={() => setDeletingField(null)}
+          onConfirm={handleDelete}
+        />
       )}
     </div>
   );

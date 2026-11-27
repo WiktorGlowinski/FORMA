@@ -270,6 +270,20 @@ export async function deleteClubFieldAction(fieldId: string) {
 export async function createTeamAction(payload: { name: string; ageGroup: string }) {
   try {
     const { clubId } = await requireAdmin();
+    if (
+      !payload ||
+      typeof payload.name !== "string" ||
+      typeof payload.ageGroup !== "string"
+    ) {
+      return { success: false, error: "Podaj prawidłową nazwę i kategorię drużyny." };
+    }
+
+    const name = payload.name.trim();
+    const ageGroup = payload.ageGroup.trim();
+    if (!name || name.length > 100 || !ageGroup || ageGroup.length > 100) {
+      return { success: false, error: "Nazwa i kategoria drużyny muszą mieć od 1 do 100 znaków." };
+    }
+
     const supabase = await createClient();
 
     const { data: currentSeason } = await supabase
@@ -284,8 +298,8 @@ export async function createTeamAction(payload: { name: string; ageGroup: string
       .insert({
         club_id: clubId,
         season_id: currentSeason?.id || null,
-        name: payload.name.trim(),
-        age_group: payload.ageGroup.trim(),
+        name,
+        age_group: ageGroup,
         is_active: true,
       })
       .select("id")
@@ -295,9 +309,104 @@ export async function createTeamAction(payload: { name: string; ageGroup: string
 
     revalidatePath("/admin/druzyny");
     revalidatePath("/admin");
+    revalidatePath("/trener");
+    revalidatePath("/koordynator");
     return { success: true, teamId: data.id };
   } catch (err: unknown) {
-    return { success: false, error: getErrorMessage(err, "Nie udalo sie wykonac operacji.") };
+    return { success: false, error: getErrorMessage(err, "Nie udało się utworzyć drużyny.") };
+  }
+}
+
+export async function updateTeamAction(
+  teamId: string,
+  payload: { name: string; ageGroup: string; isActive: boolean }
+) {
+  try {
+    const { clubId } = await requireAdmin();
+    if (typeof teamId !== "string" || !teamId.trim()) {
+      return { success: false, error: "Nie wskazano drużyny do edycji." };
+    }
+    if (
+      !payload ||
+      typeof payload.name !== "string" ||
+      typeof payload.ageGroup !== "string" ||
+      typeof payload.isActive !== "boolean"
+    ) {
+      return { success: false, error: "Podano nieprawidłowe dane drużyny." };
+    }
+
+    const name = payload.name.trim();
+    const ageGroup = payload.ageGroup.trim();
+    if (!name || name.length > 100 || !ageGroup || ageGroup.length > 100) {
+      return { success: false, error: "Nazwa i kategoria drużyny muszą mieć od 1 do 100 znaków." };
+    }
+    const supabase = await createClient();
+    const { data: team, error: teamError } = await supabase
+      .from("teams")
+      .select("id")
+      .eq("id", teamId)
+      .eq("club_id", clubId)
+      .maybeSingle();
+    if (teamError) throw teamError;
+    if (!team) {
+      return { success: false, error: "Drużyna nie należy do tego klubu." };
+    }
+
+    const { error } = await supabase
+      .from("teams")
+      .update({
+        name,
+        age_group: ageGroup,
+        is_active: payload.isActive,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", teamId)
+      .eq("club_id", clubId);
+    if (error) throw error;
+
+    revalidatePath("/admin/druzyny");
+    revalidatePath("/admin");
+    revalidatePath("/trener");
+    revalidatePath("/koordynator");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udało się zaktualizować drużyny.") };
+  }
+}
+
+export async function deleteTeamAction(teamId: string) {
+  try {
+    const { clubId } = await requireAdmin();
+    if (typeof teamId !== "string" || !teamId.trim()) {
+      return { success: false, error: "Nie wskazano drużyny do usunięcia." };
+    }
+
+    const supabase = await createClient();
+    const { data: team, error: teamError } = await supabase
+      .from("teams")
+      .select("id")
+      .eq("id", teamId)
+      .eq("club_id", clubId)
+      .maybeSingle();
+    if (teamError) throw teamError;
+    if (!team) {
+      return { success: false, error: "Drużyna nie należy do tego klubu." };
+    }
+
+    const { error } = await supabase
+      .from("teams")
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq("id", teamId)
+      .eq("club_id", clubId);
+    if (error) throw error;
+
+    revalidatePath("/admin/druzyny");
+    revalidatePath("/admin");
+    revalidatePath("/trener");
+    revalidatePath("/koordynator");
+    return { success: true };
+  } catch (err: unknown) {
+    return { success: false, error: getErrorMessage(err, "Nie udało się usunąć drużyny.") };
   }
 }
 
