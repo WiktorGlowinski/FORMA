@@ -8,14 +8,18 @@ import {
   Trash2, 
   Crown, 
   X, 
-  Shield 
+  Shield,
+  Edit2,
 } from "lucide-react";
 import { 
   createTeamAction, 
+  updateTeamAction,
+  deleteTeamAction,
   assignCoachToTeamAction, 
   removeCoachFromTeamAction 
 } from "@/app/actions/admin";
 import { cn } from "@/lib/utils";
+import { DeleteConfirmation } from "@/components/admin/delete-confirmation";
 
 export interface AvailableCoach {
   id: string;
@@ -47,6 +51,13 @@ export interface TeamItem {
   team_coaches: CoachAssignment[];
 }
 
+interface PendingCoachRemoval {
+  teamId: string;
+  teamName: string;
+  coachId: string;
+  coachName: string;
+}
+
 const AGE_GROUPS = [
   "Senior",
   "U19 (Junior Starszy)",
@@ -72,9 +83,18 @@ export function TeamsManager({
 
   // Modal tworzenia drużyny
   const [isCreateTeamOpen, setIsCreateTeamOpen] = useState(false);
-  const [newTeamName, setNewTeamName] = useState("");
-  const [newTeamAgeGroup, setNewTeamAgeGroup] = useState(AGE_GROUPS[3]);
+  const [editingTeam, setEditingTeam] = useState<TeamItem | null>(null);
+  const [teamName, setTeamName] = useState("");
+  const [teamAgeGroup, setTeamAgeGroup] = useState(AGE_GROUPS[3]);
+  const [teamIsActive, setTeamIsActive] = useState(true);
   const [submittingTeam, setSubmittingTeam] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  const [deletingTeam, setDeletingTeam] = useState<TeamItem | null>(null);
+  const [isDeletingTeam, setIsDeletingTeam] = useState(false);
+  const [deleteTeamError, setDeleteTeamError] = useState<string | null>(null);
+  const [pendingCoachRemoval, setPendingCoachRemoval] = useState<PendingCoachRemoval | null>(null);
+  const [isRemovingCoach, setIsRemovingCoach] = useState(false);
+  const [removeCoachError, setRemoveCoachError] = useState<string | null>(null);
 
   // Modal przypisywania trenera
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
@@ -82,34 +102,121 @@ export function TeamsManager({
   const [isPrimaryCoach, setIsPrimaryCoach] = useState(false);
   const [submittingAssign, setSubmittingAssign] = useState(false);
 
-  async function handleCreateTeam(e: React.FormEvent) {
+  function openCreateTeam() {
+    setTeamName("");
+    setTeamAgeGroup(AGE_GROUPS[3]);
+    setTeamIsActive(true);
+    setTeamError(null);
+    setEditingTeam(null);
+    setIsCreateTeamOpen(true);
+  }
+
+  function openEditTeam(team: TeamItem) {
+    setTeamName(team.name);
+    setTeamAgeGroup(team.age_group);
+    setTeamIsActive(team.is_active);
+    setTeamError(null);
+    setIsCreateTeamOpen(false);
+    setEditingTeam(team);
+  }
+
+  function closeTeamForm() {
+    setIsCreateTeamOpen(false);
+    setEditingTeam(null);
+    setTeamError(null);
+  }
+
+  async function handleSaveTeam(e: React.FormEvent) {
     e.preventDefault();
-    if (!newTeamName.trim()) return;
+    if (!teamName.trim() || submittingTeam) return;
 
+    setTeamError(null);
     setSubmittingTeam(true);
-    const res = await createTeamAction({
-      name: newTeamName.trim(),
-      ageGroup: newTeamAgeGroup,
-    });
+    try {
+      if (editingTeam) {
+        const res = await updateTeamAction(editingTeam.id, {
+          name: teamName,
+          ageGroup: teamAgeGroup,
+          isActive: teamIsActive,
+        });
 
-    if (res.success && res.teamId) {
-      const created: TeamItem = {
-        id: res.teamId,
-        name: newTeamName.trim(),
-        age_group: newTeamAgeGroup,
-        is_active: true,
-        created_at: new Date().toISOString(),
-        team_coaches: [],
-      };
+        if (res.success) {
+          const updated = {
+            ...editingTeam,
+            name: teamName.trim(),
+            age_group: teamAgeGroup,
+            is_active: teamIsActive,
+          };
+          setTeams((prev) =>
+            prev
+              .map((team) => team.id === updated.id ? updated : team)
+              .sort((a, b) => a.name.localeCompare(b.name, "pl"))
+          );
+          setSelectedTeam((prev) => prev?.id === updated.id ? updated : prev);
+          closeTeamForm();
+        } else {
+          setTeamError(res.error || "Nie udało się zaktualizować drużyny.");
+        }
+      } else {
+        const res = await createTeamAction({
+          name: teamName,
+          ageGroup: teamAgeGroup,
+        });
 
-      setTeams((prev) => [...prev, created]);
-      setSelectedTeam(created);
-      setNewTeamName("");
-      setIsCreateTeamOpen(false);
-    } else {
-      alert(res.error || "Nie udało się utworzyć drużyny.");
+        if (res.success && res.teamId) {
+          const created: TeamItem = {
+            id: res.teamId,
+            name: teamName.trim(),
+            age_group: teamAgeGroup,
+            is_active: true,
+            created_at: new Date().toISOString(),
+            team_coaches: [],
+          };
+
+          setTeams((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, "pl")));
+          setSelectedTeam(created);
+          closeTeamForm();
+        } else {
+          setTeamError(res.error || "Nie udało się utworzyć drużyny.");
+        }
+      }
+    } catch (error: unknown) {
+      setTeamError(
+        error instanceof Error ? error.message : "Nie udało się zapisać drużyny."
+      );
+    } finally {
+      setSubmittingTeam(false);
     }
-    setSubmittingTeam(false);
+  }
+
+  async function handleDeleteTeam() {
+    if (!deletingTeam || isDeletingTeam) return;
+
+    setDeleteTeamError(null);
+    setIsDeletingTeam(true);
+    try {
+      const res = await deleteTeamAction(deletingTeam.id);
+
+      if (res.success) {
+        setTeams((prev) =>
+          prev.map((team) =>
+            team.id === deletingTeam.id ? { ...team, is_active: false } : team
+          )
+        );
+        setSelectedTeam((prev) =>
+          prev?.id === deletingTeam.id ? { ...prev, is_active: false } : prev
+        );
+        setDeletingTeam(null);
+      } else {
+        setDeleteTeamError(res.error || "Nie udało się usunąć drużyny.");
+      }
+    } catch (error: unknown) {
+      setDeleteTeamError(
+        error instanceof Error ? error.message : "Nie udało się usunąć drużyny."
+      );
+    } finally {
+      setIsDeletingTeam(false);
+    }
   }
 
   async function handleAssignCoach(e: React.FormEvent) {
@@ -154,23 +261,47 @@ export function TeamsManager({
     setSubmittingAssign(false);
   }
 
-  async function handleRemoveCoach(coachId: string) {
+  function requestRemoveCoach(assignment: CoachAssignment) {
     if (!selectedTeam) return;
-    if (!confirm("Czy na pewno chcesz odpiąć tego trenera od zespołu?")) return;
+    setRemoveCoachError(null);
+    setPendingCoachRemoval({
+      teamId: selectedTeam.id,
+      teamName: selectedTeam.name,
+      coachId: assignment.coach_id,
+      coachName: assignment.profiles?.full_name || "Trener",
+    });
+  }
 
-    const res = await removeCoachFromTeamAction(selectedTeam.id, coachId);
-    if (res.success) {
-      setTeams((prev) =>
-        prev.map((tm) =>
-          tm.id === selectedTeam.id ? { ...tm, team_coaches: tm.team_coaches.filter((c) => c.coach_id !== coachId) } : tm
-        )
-      );
+  async function handleRemoveCoach() {
+    if (!pendingCoachRemoval || isRemovingCoach) return;
+    setRemoveCoachError(null);
+    setIsRemovingCoach(true);
 
-      setSelectedTeam((prev) =>
-        prev ? { ...prev, team_coaches: prev.team_coaches.filter((c) => c.coach_id !== coachId) } : null
+    try {
+      const { teamId, coachId } = pendingCoachRemoval;
+      const res = await removeCoachFromTeamAction(teamId, coachId);
+      if (res.success) {
+        setTeams((prev) =>
+          prev.map((tm) =>
+            tm.id === teamId ? { ...tm, team_coaches: tm.team_coaches.filter((c) => c.coach_id !== coachId) } : tm
+          )
+        );
+
+        setSelectedTeam((prev) =>
+          prev?.id === teamId
+            ? { ...prev, team_coaches: prev.team_coaches.filter((c) => c.coach_id !== coachId) }
+            : prev
+        );
+        setPendingCoachRemoval(null);
+      } else {
+        setRemoveCoachError(res.error || "Nie udało się usunąć trenera z drużyny.");
+      }
+    } catch (error: unknown) {
+      setRemoveCoachError(
+        error instanceof Error ? error.message : "Nie udało się usunąć trenera z drużyny."
       );
-    } else {
-      alert(res.error || "Nie udało się usunąć trenera z drużyny.");
+    } finally {
+      setIsRemovingCoach(false);
     }
   }
 
@@ -191,7 +322,7 @@ export function TeamsManager({
 
         <button
           type="button"
-          onClick={() => setIsCreateTeamOpen(true)}
+          onClick={openCreateTeam}
           className="inline-flex h-11 items-center gap-2 rounded-xl border-2 border-foreground bg-primary px-4 text-xs font-heading uppercase tracking-wider font-black text-primary-foreground transition active:scale-95 shadow-[3px_3px_0_0_var(--foreground)] shrink-0"
         >
           <Plus className="size-4 stroke-3" />
@@ -226,7 +357,7 @@ export function TeamsManager({
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-heading text-xl uppercase tracking-tight">{tm.name}</span>
                     <span className="rounded-md border border-foreground/20 bg-muted px-2 py-0.5 font-mono text-[10px] font-bold uppercase text-foreground">
-                      {tm.age_group}
+                      {tm.age_group} · {tm.is_active ? "Aktywna" : "Nieaktywna"}
                     </span>
                   </div>
 
@@ -261,19 +392,46 @@ export function TeamsManager({
                   <h2 className="mt-1 font-heading text-3xl uppercase tracking-tight">
                     {selectedTeam.name}
                   </h2>
+                  <span className={`font-mono text-[10px] font-bold uppercase ${selectedTeam.is_active ? "text-primary" : "text-muted-foreground"}`}>
+                    {selectedTeam.is_active ? "Aktywna drużyna" : "Nieaktywna drużyna"}
+                  </span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedCoachId(availableCoaches[0]?.id || "");
-                    setIsAssignModalOpen(true);
-                  }}
-                  className="inline-flex h-10 items-center gap-1.5 rounded-xl border-2 border-foreground/20 bg-background px-3.5 text-xs font-heading uppercase tracking-wider font-bold hover:bg-muted transition-all active:scale-95 shadow-[2px_2px_0_0_var(--foreground)] shrink-0"
-                >
-                  <UserPlus className="size-3.5 text-primary" />
-                  <span>Przypisz trenera</span>
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openEditTeam(selectedTeam)}
+                    className="inline-flex h-10 items-center gap-1.5 rounded-xl border-2 border-foreground/20 bg-background px-3.5 text-xs font-heading uppercase tracking-wider font-bold hover:bg-muted transition-all active:scale-95"
+                  >
+                    <Edit2 className="size-3.5" />
+                    <span>Edytuj</span>
+                  </button>
+                  {selectedTeam.is_active && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteTeamError(null);
+                        setDeletingTeam(selectedTeam);
+                      }}
+                      className="inline-flex h-10 items-center gap-1.5 rounded-xl border-2 border-destructive/30 bg-destructive/5 px-3.5 text-xs font-heading uppercase tracking-wider font-bold text-destructive hover:bg-destructive/10 transition-all active:scale-95"
+                    >
+                      <Trash2 className="size-3.5" />
+                      <span>Usuń</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!selectedTeam.is_active}
+                    onClick={() => {
+                      setSelectedCoachId(availableCoaches[0]?.id || "");
+                      setIsAssignModalOpen(true);
+                    }}
+                    className="inline-flex h-10 items-center gap-1.5 rounded-xl border-2 border-foreground/20 bg-background px-3.5 text-xs font-heading uppercase tracking-wider font-bold hover:bg-muted transition-all active:scale-95 shadow-[2px_2px_0_0_var(--foreground)] shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <UserPlus className="size-3.5 text-primary" />
+                    <span>Przypisz trenera</span>
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -319,7 +477,7 @@ export function TeamsManager({
 
                         <button
                           type="button"
-                          onClick={() => handleRemoveCoach(assignment.coach_id)}
+                          onClick={() => requestRemoveCoach(assignment)}
                           className="rounded-lg border border-destructive/30 p-2 text-destructive hover:bg-destructive/10 transition-colors"
                           title="Odepnij trenera"
                         >
@@ -412,17 +570,17 @@ export function TeamsManager({
       )}
 
       {/* Modal: Tworzenie drużyny */}
-      {isCreateTeamOpen && (
+      {(isCreateTeamOpen || editingTeam) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
           <div className="w-full max-w-md rounded-2xl border-2 border-foreground bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)] space-y-4">
             <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-heading text-2xl uppercase tracking-tight">Nowa Drużyna</h3>
-              <button type="button" onClick={() => setIsCreateTeamOpen(false)} className="rounded-full border p-1 hover:bg-muted">
+              <h3 className="font-heading text-2xl uppercase tracking-tight">{editingTeam ? "Edytuj drużynę" : "Nowa Drużyna"}</h3>
+              <button type="button" onClick={closeTeamForm} className="rounded-full border p-1 hover:bg-muted">
                 <X className="size-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateTeam} className="space-y-4">
+            <form onSubmit={handleSaveTeam} className="space-y-4">
               <div>
                 <label className="font-mono text-xs font-bold uppercase text-muted-foreground block mb-1.5">
                   Nazwa drużyny
@@ -430,9 +588,10 @@ export function TeamsManager({
                 <input
                   type="text"
                   required
+                  maxLength={100}
                   placeholder="np. Trampkarz U14 A"
-                  value={newTeamName}
-                  onChange={(e) => setNewTeamName(e.target.value)}
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
                   className="h-11 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm outline-none focus:border-foreground"
                 />
               </div>
@@ -442,20 +601,41 @@ export function TeamsManager({
                   Kategoria wiekowa
                 </label>
                 <select
-                  value={newTeamAgeGroup}
-                  onChange={(e) => setNewTeamAgeGroup(e.target.value)}
+                  value={teamAgeGroup}
+                  onChange={(e) => setTeamAgeGroup(e.target.value)}
                   className="h-11 w-full rounded-xl border-2 border-foreground/20 bg-background px-3 font-mono text-sm outline-none focus:border-foreground"
                 >
+                  {!AGE_GROUPS.includes(teamAgeGroup) && (
+                    <option value={teamAgeGroup}>{teamAgeGroup}</option>
+                  )}
                   {AGE_GROUPS.map((grp) => (
                     <option key={grp} value={grp}>{grp}</option>
                   ))}
                 </select>
               </div>
 
+              {editingTeam && (
+                <label className="flex items-center justify-between rounded-xl border border-foreground/15 p-3">
+                  <span className="font-mono text-xs font-bold uppercase">Aktywna drużyna</span>
+                  <input
+                    type="checkbox"
+                    checked={teamIsActive}
+                    onChange={(e) => setTeamIsActive(e.target.checked)}
+                    className="size-4 accent-primary"
+                  />
+                </label>
+              )}
+
+              {teamError && (
+                <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs text-destructive">
+                  {teamError}
+                </p>
+              )}
+
               <div className="pt-2 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsCreateTeamOpen(false)}
+                  onClick={closeTeamForm}
                   className="h-11 w-1/2 rounded-xl border-2 border-foreground/20 bg-background font-heading text-xs uppercase hover:bg-muted"
                 >
                   Anuluj
@@ -465,12 +645,45 @@ export function TeamsManager({
                   disabled={submittingTeam}
                   className="h-11 w-1/2 rounded-xl border-2 border-foreground bg-primary font-heading text-xs font-bold uppercase text-primary-foreground shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50"
                 >
-                  {submittingTeam ? "Tworzenie..." : "Zapisz drużynę"}
+                  {submittingTeam ? "Zapisywanie..." : editingTeam ? "Zapisz zmiany" : "Zapisz drużynę"}
                 </button>
               </div>
             </form>
           </div>
         </div>
+      )}
+
+      {deletingTeam && (
+        <DeleteConfirmation
+          title="Dezaktywuj drużynę"
+          description={(
+            <p>
+              Drużyna <strong className="text-foreground">{deletingTeam.name}</strong> zostanie wyłączona z bieżącego użycia. Jej zawodnicy, trenerzy i historia pozostaną zachowani.
+            </p>
+          )}
+          error={deleteTeamError}
+          isProcessing={isDeletingTeam}
+          onCancel={() => setDeletingTeam(null)}
+          onConfirm={handleDeleteTeam}
+        />
+      )}
+
+      {pendingCoachRemoval && (
+        <DeleteConfirmation
+          title="Odepnij trenera"
+          description={(
+            <p>
+              Trener <strong className="text-foreground">{pendingCoachRemoval.coachName}</strong> zostanie odpięty od drużyny{" "}
+              <strong className="text-foreground">{pendingCoachRemoval.teamName}</strong>.
+            </p>
+          )}
+          error={removeCoachError}
+          isProcessing={isRemovingCoach}
+          confirmLabel="Odepnij"
+          processingLabel="Odpinanie..."
+          onCancel={() => setPendingCoachRemoval(null)}
+          onConfirm={handleRemoveCoach}
+        />
       )}
     </div>
   );

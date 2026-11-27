@@ -21,6 +21,7 @@ import {
 } from "@/app/actions/admin";
 import { uploadImageAction } from "@/app/actions/upload";
 import { cn } from "@/lib/utils";
+import { DeleteConfirmation } from "@/components/admin/delete-confirmation";
 
 interface SeasonItem {
   id: string;
@@ -43,6 +44,8 @@ export function SeasonsManager({
   const [logoUrl, setLogoUrl] = useState<string>(initialLogoUrl || "");
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [logoSuccessMsg, setLogoSuccessMsg] = useState(false);
+  const [isConfirmingLogoRemoval, setIsConfirmingLogoRemoval] = useState(false);
+  const [logoRemovalError, setLogoRemovalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Modal nowego sezonu
@@ -138,21 +141,30 @@ export function SeasonsManager({
 
   // Usunięcie herbu
   async function handleRemoveLogo() {
-    if (!window.confirm("Czy na pewno chcesz usunąć herb klubu?")) return;
+    if (isUploadingLogo) return;
 
+    setLogoRemovalError(null);
     setIsUploadingLogo(true);
-    const res = await updateClubLogoAction("");
+    try {
+      const res = await updateClubLogoAction("");
 
-    if (res.success) {
-      setLogoUrl("");
-      setLogoSuccessMsg(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      if (res.success) {
+        setLogoUrl("");
+        setLogoSuccessMsg(false);
+        setIsConfirmingLogoRemoval(false);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+      } else {
+        setLogoRemovalError(res.error || "Błąd podczas usuwania herbu.");
       }
-    } else {
-      alert(res.error || "Błąd podczas usuwania herbu.");
+    } catch (error: unknown) {
+      setLogoRemovalError(
+        error instanceof Error ? error.message : "Błąd podczas usuwania herbu."
+      );
+    } finally {
+      setIsUploadingLogo(false);
     }
-    setIsUploadingLogo(false);
   }
 
   const currentSeason = seasons.find((s) => s.is_current);
@@ -348,7 +360,10 @@ export function SeasonsManager({
                 <button
                   type="button"
                   disabled={isUploadingLogo}
-                  onClick={handleRemoveLogo}
+                  onClick={() => {
+                    setLogoRemovalError(null);
+                    setIsConfirmingLogoRemoval(true);
+                  }}
                   title="Usuń herb"
                   className="size-11 inline-flex items-center justify-center rounded-xl border-2 border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 active:scale-95 transition-all shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50 shrink-0"
                 >
@@ -445,6 +460,20 @@ export function SeasonsManager({
             </form>
           </div>
         </div>
+      )}
+
+      {isConfirmingLogoRemoval && (
+        <DeleteConfirmation
+          title="Usuń herb klubu"
+          description={<p>Czy na pewno chcesz usunąć herb klubu?</p>}
+          error={logoRemovalError}
+          isProcessing={isUploadingLogo}
+          onCancel={() => {
+            setIsConfirmingLogoRemoval(false);
+            setLogoRemovalError(null);
+          }}
+          onConfirm={handleRemoveLogo}
+        />
       )}
     </div>
   );
