@@ -16,7 +16,23 @@ export default async function AdminTeamsPage() {
     getClubCoachesAction(),
   ]);
 
-  const teams = teamsRes.success && teamsRes.teams
+  if (!teamsRes.success) {
+    return (
+      <div className="rounded-2xl border-2 border-destructive bg-destructive/10 p-6 text-xs font-mono text-destructive">
+        {teamsRes.error || "Nie udało się załadować drużyn."}
+      </div>
+    );
+  }
+
+  if (!coachesRes.success) {
+    return (
+      <div className="rounded-2xl border-2 border-destructive bg-destructive/10 p-6 text-xs font-mono text-destructive">
+        {coachesRes.error || "Nie udało się załadować trenerów."}
+      </div>
+    );
+  }
+
+  const teams = teamsRes.teams
     ? teamsRes.teams.map((team) => ({
         ...team,
         team_coaches: team.team_coaches.map((assignment) => ({
@@ -27,9 +43,7 @@ export default async function AdminTeamsPage() {
         })),
       }))
     : [];
-  const coaches = coachesRes.success && coachesRes.coaches
-    ? coachesRes.coaches.filter((coach) => coach.role === "coach")
-    : [];
+  const coaches = coachesRes.coaches.filter((coach) => coach.role === "coach");
 
   return (
     <TeamsManager 

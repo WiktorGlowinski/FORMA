@@ -15,8 +15,7 @@ import {
   Edit2,
   Trash2,
   Camera,
-  Loader2,
-  AlertTriangle
+  Loader2
 } from "lucide-react";
 import { 
   createCoachAccountAction, 
@@ -24,6 +23,7 @@ import {
   deleteCoachAction 
 } from "@/app/actions/admin";
 import { uploadImageAction } from "@/app/actions/upload";
+import { DeleteConfirmation } from "@/components/admin/delete-confirmation";
 
 interface AssignedTeamInfo {
   id: string;
@@ -58,6 +58,7 @@ export function CoachesManager({
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [pendingAvatarClear, setPendingAvatarClear] = useState<"create" | "edit" | null>(null);
 
   // Formularz tworzenia
   const [createName, setCreateName] = useState("");
@@ -96,6 +97,12 @@ export function CoachesManager({
     setEditAvatar(coach.avatarUrl || "");
     setEditIsActive(coach.isActive);
     setErrorMsg(null);
+  }
+
+  function confirmAvatarClear() {
+    if (pendingAvatarClear === "create") setCreateAvatar("");
+    if (pendingAvatarClear === "edit") setEditAvatar("");
+    setPendingAvatarClear(null);
   }
 
   // Upload zdjęcia w formularzu tworzenia
@@ -222,18 +229,26 @@ export function CoachesManager({
 
   // Potwierdzenie usunięcia
   async function handleDeleteConfirm() {
-    if (!deletingCoach) return;
+    if (!deletingCoach || isSubmitting) return;
 
+    setErrorMsg(null);
     setIsSubmitting(true);
-    const res = await deleteCoachAction(deletingCoach.id);
+    try {
+      const res = await deleteCoachAction(deletingCoach.id);
 
-    if (res.success) {
-      setCoaches((prev) => prev.filter((c) => c.id !== deletingCoach.id));
-      setDeletingCoach(null);
-    } else {
-      alert(res.error || "Nie udało się usunąć trenera.");
+      if (res.success) {
+        setCoaches((prev) => prev.filter((c) => c.id !== deletingCoach.id));
+        setDeletingCoach(null);
+      } else {
+        setErrorMsg(res.error || "Nie udało się usunąć trenera.");
+      }
+    } catch (error: unknown) {
+      setErrorMsg(
+        error instanceof Error ? error.message : "Nie udało się usunąć trenera."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   }
 
   return (
@@ -398,7 +413,10 @@ export function CoachesManager({
 
                 <button
                   type="button"
-                  onClick={() => setDeletingCoach(coach)}
+                  onClick={() => {
+                    setErrorMsg(null);
+                    setDeletingCoach(coach);
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 font-mono text-xs text-destructive hover:bg-destructive/15 transition-colors"
                   title="Usuń trenera z bazy"
                 >
@@ -479,7 +497,7 @@ export function CoachesManager({
                     {createAvatar && (
                       <button
                         type="button"
-                        onClick={() => setCreateAvatar("")}
+                        onClick={() => setPendingAvatarClear("create")}
                         className="h-8 px-2 rounded-lg border border-destructive/30 text-destructive text-xs hover:bg-destructive/10"
                       >
                         <Trash2 className="size-3.5" />
@@ -665,7 +683,7 @@ export function CoachesManager({
                     {editAvatar && (
                       <button
                         type="button"
-                        onClick={() => setEditAvatar("")}
+                        onClick={() => setPendingAvatarClear("edit")}
                         className="h-8 px-2 rounded-lg border border-destructive/30 text-destructive text-xs hover:bg-destructive/10"
                       >
                         <Trash2 className="size-3.5" />
@@ -762,46 +780,35 @@ export function CoachesManager({
       )}
 
       {/* MODAL 3: POTWIERDZENIE USUNIĘCIA */}
-      {deletingCoach && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="w-full max-w-sm rounded-2xl border-2 border-destructive bg-card p-6 shadow-[5px_5px_0_0_var(--foreground)] space-y-4">
-            <div className="flex items-center gap-3 text-destructive">
-              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-2.5">
-                <AlertTriangle className="size-6" />
-              </div>
-              <div>
-                <h3 className="font-heading text-xl uppercase tracking-tight text-foreground">
-                  Usunąć trenera?
-                </h3>
-                <p className="font-mono text-xs text-muted-foreground">
-                  {deletingCoach.fullName} ({deletingCoach.email})
-                </p>
-              </div>
-            </div>
-
-            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-              Konto trenera zostanie trwale usunięte z modułu autoryzacji oraz odpięte od wszystkich zespołów w klubie.
+      {pendingAvatarClear && (
+        <DeleteConfirmation
+          title="Usuń zdjęcie profilowe"
+          description={(
+            <p>
+              Zdjęcie zostanie usunięte z formularza {pendingAvatarClear === "create" ? "tworzenia" : "edycji"} trenera.
             </p>
+          )}
+          onCancel={() => setPendingAvatarClear(null)}
+          onConfirm={confirmAvatarClear}
+        />
+      )}
 
-            <div className="pt-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setDeletingCoach(null)}
-                className="h-10 w-1/2 rounded-xl border-2 border-foreground/20 bg-background font-heading text-xs uppercase hover:bg-muted"
-              >
-                Anuluj
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteConfirm}
-                disabled={isSubmitting}
-                className="h-10 w-1/2 rounded-xl border-2 border-destructive bg-destructive font-heading text-xs font-bold uppercase text-destructive-foreground shadow-[2px_2px_0_0_var(--foreground)] disabled:opacity-50"
-              >
-                {isSubmitting ? "Usuwanie..." : "Tak, usuń"}
-              </button>
-            </div>
-          </div>
-        </div>
+      {deletingCoach && (
+        <DeleteConfirmation
+          title="Usunąć trenera?"
+          description={(
+            <>
+              <p>
+                Konto <strong className="text-foreground">{deletingCoach.fullName}</strong> ({deletingCoach.email}) zostanie trwale usunięte z modułu autoryzacji oraz odpięte od wszystkich zespołów w klubie.
+              </p>
+            </>
+          )}
+          error={errorMsg}
+          isProcessing={isSubmitting}
+          confirmLabel="Tak, usuń"
+          onCancel={() => setDeletingCoach(null)}
+          onConfirm={handleDeleteConfirm}
+        />
       )}
     </div>
   );

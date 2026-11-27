@@ -18,7 +18,6 @@ import {
   ArrowRightLeft,
   ArrowUpDown,
   Edit2,
-  AlertTriangle,
 } from "lucide-react";
 import {
   createPlayerAction,
@@ -29,6 +28,7 @@ import {
 } from "@/app/actions/admin";
 import { uploadImageAction } from "@/app/actions/upload";
 import { CsvImporterModal } from "@/components/admin/csv-importer";
+import { DeleteConfirmation } from "@/components/admin/delete-confirmation";
 
 interface PlayerItem {
   id: string;
@@ -122,6 +122,10 @@ export function PlayersManager({
   const [editingPlayer, setEditingPlayer] = useState<PlayerItem | null>(null);
   const [deletingPlayer, setDeletingPlayer] = useState<PlayerItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deletePlayerError, setDeletePlayerError] = useState<string | null>(null);
+  const [isConfirmingAvatarRemoval, setIsConfirmingAvatarRemoval] = useState(false);
+  const [avatarRemovalError, setAvatarRemovalError] = useState<string | null>(null);
+  const [isConfirmingNewAvatarRemoval, setIsConfirmingNewAvatarRemoval] = useState(false);
   const [editFirstName, setEditFirstName] = useState("");
   const [editLastName, setEditLastName] = useState("");
   const [editJerseyNumber, setEditJerseyNumber] = useState("");
@@ -138,6 +142,12 @@ export function PlayersManager({
 
   const numericBirthYear = parseInt(birthYear, 10) || currentYear;
   const isJunior = (currentYear - numericBirthYear) < 18;
+
+  function closeAvatarModal() {
+    setAvatarModalPlayer(null);
+    setIsConfirmingAvatarRemoval(false);
+    setAvatarRemovalError(null);
+  }
 
   const filteredPlayers = players.filter((p) => {
     const matchesTeam =
@@ -297,27 +307,33 @@ export function PlayersManager({
 
   // Usunięcie zdjęcia klikniętego zawodnika
   async function handleRemoveDirectAvatar() {
-    if (!avatarModalPlayer || !avatarModalPlayer.avatar_url) return;
-    if (!window.confirm(`Czy na pewno chcesz usunąć zdjęcie zawodnika ${avatarModalPlayer.first_name} ${avatarModalPlayer.last_name}?`)) {
-      return;
-    }
+    if (!avatarModalPlayer || !avatarModalPlayer.avatar_url || isDirectUploading) return;
 
+    setAvatarRemovalError(null);
     setIsDirectUploading(true);
-    const res = await updatePlayerAvatarAction(avatarModalPlayer.id, null);
+    try {
+      const res = await updatePlayerAvatarAction(avatarModalPlayer.id, null);
 
-    if (res.success) {
-      setPlayers((prev) =>
-        prev.map((p) =>
-          p.id === avatarModalPlayer.id ? { ...p, avatar_url: null } : p
-        )
+      if (res.success) {
+        setPlayers((prev) =>
+          prev.map((p) =>
+            p.id === avatarModalPlayer.id ? { ...p, avatar_url: null } : p
+          )
+        );
+        setAvatarModalPlayer((prev) =>
+          prev ? { ...prev, avatar_url: null } : null
+        );
+        setIsConfirmingAvatarRemoval(false);
+      } else {
+        setAvatarRemovalError(res.error || "Błąd podczas usuwania zdjęcia.");
+      }
+    } catch (error: unknown) {
+      setAvatarRemovalError(
+        error instanceof Error ? error.message : "Błąd podczas usuwania zdjęcia."
       );
-      setAvatarModalPlayer((prev) =>
-        prev ? { ...prev, avatar_url: null } : null
-      );
-    } else {
-      alert(res.error || "Błąd podczas usuwania zdjęcia.");
+    } finally {
+      setIsDirectUploading(false);
     }
-    setIsDirectUploading(false);
   }
 
   function openTransferDialog(player: PlayerItem) {
@@ -450,22 +466,30 @@ export function PlayersManager({
   }
 
   async function handleDeletePlayer() {
-    if (!deletingPlayer) return;
+    if (!deletingPlayer || isDeleting) return;
+    setDeletePlayerError(null);
     setIsDeleting(true);
-    const result = await deletePlayerAction(deletingPlayer.id);
-    if (result.success) {
-      setPlayers((current) =>
-        current.map((player) =>
-          player.id === deletingPlayer.id
-            ? { ...player, is_active: false, current_team_id: null, teams: null }
-            : player
-        )
+    try {
+      const result = await deletePlayerAction(deletingPlayer.id);
+      if (result.success) {
+        setPlayers((current) =>
+          current.map((player) =>
+            player.id === deletingPlayer.id
+              ? { ...player, is_active: false, current_team_id: null, teams: null }
+              : player
+          )
+        );
+        setDeletingPlayer(null);
+      } else {
+        setDeletePlayerError(result.error || "Nie udało się usunąć zawodnika.");
+      }
+    } catch (error: unknown) {
+      setDeletePlayerError(
+        error instanceof Error ? error.message : "Nie udało się usunąć zawodnika."
       );
-      setDeletingPlayer(null);
-    } else {
-      alert(result.error || "Nie udało się usunąć zawodnika.");
+    } finally {
+      setIsDeleting(false);
     }
-    setIsDeleting(false);
   }
 
   function formatBirthDateDisplay(year: number, dateStr?: string | null) {
@@ -625,6 +649,7 @@ export function PlayersManager({
                                 {player.first_name[0]}{player.last_name[0]}
                               </span>
                             )}
+
                             <div className="absolute inset-0 bg-background/80 flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity">
                               <Camera className="size-4 text-primary" />
                             </div>
@@ -748,7 +773,10 @@ export function PlayersManager({
                             {player.is_active && (
                               <button
                                 type="button"
-                                onClick={() => setDeletingPlayer(player)}
+                                onClick={() => {
+                                  setDeletePlayerError(null);
+                                  setDeletingPlayer(player);
+                                }}
                                 className="inline-flex items-center rounded-lg border border-destructive/30 bg-destructive/5 p-1.5 text-destructive transition hover:bg-destructive/15"
                                 title="Usuń zawodnika"
                               >
@@ -941,23 +969,30 @@ export function PlayersManager({
       )}
 
       {deletingPlayer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border-2 border-destructive bg-card p-6 shadow-[5px_5px_0_0_var(--destructive)] space-y-4">
-            <div className="flex items-center gap-3 text-destructive">
-              <AlertTriangle className="size-6" />
-              <h3 className="font-heading text-xl uppercase">Usuń zawodnika</h3>
-            </div>
-            <p className="font-mono text-xs text-muted-foreground">
+        <DeleteConfirmation
+          title="Usuń zawodnika"
+          description={(
+            <p>
               Zawodnik <strong className="text-foreground">{deletingPlayer.first_name} {deletingPlayer.last_name}</strong> zostanie oznaczony jako nieaktywny i odpięty od drużyny. Historia pozostanie zachowana.
             </p>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setDeletingPlayer(null)} disabled={isDeleting} className="h-10 flex-1 rounded-xl border-2 border-foreground/20 font-heading text-xs font-bold uppercase">Anuluj</button>
-              <button type="button" onClick={handleDeletePlayer} disabled={isDeleting} className="h-10 flex-1 rounded-xl border-2 border-destructive bg-destructive text-white font-heading text-xs font-bold uppercase disabled:opacity-50">
-                {isDeleting ? "Usuwanie..." : "Usuń"}
-              </button>
-            </div>
-          </div>
-        </div>
+          )}
+          error={deletePlayerError}
+          isProcessing={isDeleting}
+          onCancel={() => setDeletingPlayer(null)}
+          onConfirm={handleDeletePlayer}
+        />
+      )}
+
+      {isConfirmingNewAvatarRemoval && (
+        <DeleteConfirmation
+          title="Usuń zdjęcie zawodnika"
+          description={<p>Zdjęcie zostanie usunięte z formularza nowego zawodnika.</p>}
+          onCancel={() => setIsConfirmingNewAvatarRemoval(false)}
+          onConfirm={() => {
+            setAvatarUrl("");
+            setIsConfirmingNewAvatarRemoval(false);
+          }}
+        />
       )}
 
       {/* MODAL BEZPOŚREDNIEJ EDYCJI ZDJĘCIA GRACZA (PO KLIKNIĘCIU NA GRACZA) */}
@@ -968,7 +1003,7 @@ export function PlayersManager({
               <span className="font-mono text-xs font-bold uppercase text-primary">Zdjęcie zawodnika</span>
               <button 
                 type="button" 
-                onClick={() => setAvatarModalPlayer(null)} 
+                onClick={closeAvatarModal}
                 className="rounded-full border p-1 hover:bg-muted"
               >
                 <X className="size-4" />
@@ -1040,7 +1075,10 @@ export function PlayersManager({
                 <button
                   type="button"
                   disabled={isDirectUploading}
-                  onClick={handleRemoveDirectAvatar}
+                  onClick={() => {
+                    setAvatarRemovalError(null);
+                    setIsConfirmingAvatarRemoval(true);
+                  }}
                   className="w-full h-10 inline-flex items-center justify-center gap-1.5 rounded-xl border border-destructive/30 bg-destructive/10 text-destructive font-heading text-xs uppercase font-bold hover:bg-destructive/20 active:scale-95 transition disabled:opacity-50"
                 >
                   <Trash2 className="size-3.5" />
@@ -1050,7 +1088,7 @@ export function PlayersManager({
 
               <button
                 type="button"
-                onClick={() => setAvatarModalPlayer(null)}
+                onClick={closeAvatarModal}
                 className="w-full h-10 rounded-xl border border-foreground/20 font-heading text-xs uppercase hover:bg-muted transition"
               >
                 Zamknij
@@ -1058,6 +1096,27 @@ export function PlayersManager({
             </div>
           </div>
         </div>
+      )}
+
+      {isConfirmingAvatarRemoval && avatarModalPlayer?.avatar_url && (
+        <DeleteConfirmation
+          title="Usuń zdjęcie zawodnika"
+          description={(
+            <p>
+              Czy na pewno chcesz usunąć zdjęcie zawodnika{" "}
+              <strong className="text-foreground">
+                {avatarModalPlayer.first_name} {avatarModalPlayer.last_name}
+              </strong>?
+            </p>
+          )}
+          error={avatarRemovalError}
+          isProcessing={isDirectUploading}
+          onCancel={() => {
+            setIsConfirmingAvatarRemoval(false);
+            setAvatarRemovalError(null);
+          }}
+          onConfirm={handleRemoveDirectAvatar}
+        />
       )}
 
       {/* MODAL TWORZENIA NOWEGO ZAWODNIKA */}
@@ -1118,7 +1177,7 @@ export function PlayersManager({
                     {avatarUrl && (
                       <button
                         type="button"
-                        onClick={() => setAvatarUrl("")}
+                        onClick={() => setIsConfirmingNewAvatarRemoval(true)}
                         className="h-8 px-2 rounded-lg border border-destructive/30 text-destructive text-xs hover:bg-destructive/10"
                       >
                         <Trash2 className="size-3.5" />
